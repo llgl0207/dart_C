@@ -50,6 +50,7 @@
 osThreadId defaultTaskHandle;
 osThreadId MyTask1Handle;
 osThreadId myTask2Handle;
+osThreadId PidTaskHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -59,6 +60,7 @@ osThreadId myTask2Handle;
 void StartDefaultTask(void const * argument);
 extern void MotorUpdate(void const * argument);
 extern void StartTask2(void const * argument);
+extern void StartPidTask(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -116,6 +118,10 @@ void MX_FREERTOS_Init(void) {
   /* definition and creation of myTask2 */
   osThreadDef(myTask2, StartTask2, osPriorityIdle, 0, 128);
   myTask2Handle = osThreadCreate(osThread(myTask2), NULL);
+
+  /* definition and creation of PidTask */
+  osThreadDef(PidTask, StartPidTask, osPriorityIdle, 0, 128);
+  PidTaskHandle = osThreadCreate(osThread(PidTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */

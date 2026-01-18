@@ -32,31 +32,59 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef struct{
-      uint8_t data[8];
-      uint32_t StdId;
-    }MotorSend;//对应标志位的要发送的数据结构体
-    typedef struct{
-      uint8_t data[2];
-      uint32_t StdId;
-      uint8_t motor_byte;
-      uint16_t singleAngle;
-      int16_t rpm;
-      int16_t torque;
-      int8_t tempr;
-      int angle;
-    }Motor;//对应每个电机的结构体
-
+  double Kp;
+  double Ki;
+  double Kd;
+  double error;
+  double error_last;
+  double integral;
+  double output;
+  double maxOutput;
+  double deadband;
+  double intergralLimit;
+  double setpoint;
+  double *outputAdress;
+  double *inputAdress;
+}Pid;//
+typedef struct{
+  uint8_t data[8];
+  uint32_t StdId;
+}MotorSend;//对应标志位的要发送的数据结构体
+enum PidMode{disable,currentMode,angleMode,speedMode,torqueMode};
+typedef struct{
+  uint16_t singleAngle;
+  double rpm;
+  double torque;
+  int8_t tempr;
+  double angle;
+  enum PidMode pidMode;
+}MotorState;//存储电机状态的结构体
+typedef struct{
+  double output;
+  uint32_t StdId;
+  uint8_t motor_byte;
+  uint8_t enabled; //使能
+  uint8_t maxTemp; // 温度阈值
+  double maxTorque; // 转矩阈值
+  MotorState motorState;
+  Pid anglePid,speedPid,torquePid;
+}Motor;//对应每个电机的结构体
+    #define MOTOR_SEND_NUM 3
     MotorSend _1FE={{0x00},0x1FE},
     _1FF={{0x00},0x1FF},
     _200={{0x00},0x200};
+    MotorSend *motor_send_array[MOTOR_SEND_NUM]={&_1FE,&_1FF,&_200};
     Motor 
-    GM6020={{0x00,0x00},0x1FE,0},
-    fric1={{0x00,0x00},0x200,0},
-    fric2={{0x00,0x00},0x200,2},
-    fric3={{0x00,0x00},0x200,4},
-    fric4={{0x00,0x00},0x200,6},
-    lift={{0x00,0x00},0x1FF,4},
-    load={{0x00,0x00},0x1FF,2};
+    GM6020={0,0x1FE,0},
+    fric1={0,0x200,0},
+    fric2={0,0x200,2},
+    fric3={0,0x200,4},
+    fric4={0,0x200,6},
+    lift={0,0x1FF,4},
+    load={0,0x1FF,2};
+    #define MOTOR_NUM 7
+    //对应所有电机的结构体指针数组,记得按照反馈ID顺序排列，第一个反馈标志位是0x201
+    Motor *motor_array[MOTOR_NUM]={&fric1,&fric2,&fric3,&fric4,&GM6020,&load,&lift};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -66,29 +94,59 @@ typedef struct{
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+void PidInit(Pid *pid,double Kp,double Ki,double Kd,double maxOutput,double deadband,double intergralLimit){//初始化PID
+  pid->Kp=Kp;
+  pid->Ki=Ki;
+  pid->Kd=Kd;
+  pid->maxOutput=maxOutput;
+  pid->deadband=deadband;
+  pid->intergralLimit=intergralLimit;
+}
+void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,double maxTorque){//初始化电机结构体
+  motor->StdId=StdId;
+  motor->motor_byte=motor_byte;
+  motor->motorState.pidMode=disable;
+  motor->motorState.singleAngle=0;
+  motor->motorState.angle=0;
+  motor->motorState.rpm=0;
+  motor->motorState.torque=0;
+  motor->motorState.tempr=0;
+  motor->enabled = 1;
+  motor->maxTemp = maxTemp;
+  motor->maxTorque = maxTorque;
+  
+  // 初始化PID指针为空，防止未配置模式时误计算
+  motor->anglePid.inputAdress = NULL;
+  motor->anglePid.outputAdress = NULL;
+  motor->speedPid.inputAdress = NULL;
+  motor->speedPid.outputAdress = NULL;
+  motor->torquePid.inputAdress = NULL;
+  motor->torquePid.outputAdress = NULL;
+}
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);
 void TransferToMotorSend(Motor *motor){//根据电机的StdId来决定发送到哪个MotorSend结构体中
+  int16_t out_int = (int16_t)motor->output;
   if(motor->StdId==0x1FE){
-    _1FE.data[motor->motor_byte]=motor->data[0];
-    _1FE.data[motor->motor_byte+1]=motor->data[1];
+    _1FE.data[motor->motor_byte]=(uint8_t)(out_int>>8);
+    _1FE.data[motor->motor_byte+1]=(uint8_t)(out_int);
   }else if(motor->StdId==0x1FF){
-    _1FF.data[motor->motor_byte]=motor->data[0];
-    _1FF.data[motor->motor_byte+1]=motor->data[1];
+    _1FF.data[motor->motor_byte]=(uint8_t)(out_int>>8);
+    _1FF.data[motor->motor_byte+1]=(uint8_t)(out_int);
   }else if(motor->StdId==0x200){
-    _200.data[motor->motor_byte]=motor->data[0];
-    _200.data[motor->motor_byte+1]=motor->data[1];
+    _200.data[motor->motor_byte]=(uint8_t)(out_int>>8);
+    _200.data[motor->motor_byte+1]=(uint8_t)(out_int);
   }
 }
 void CanSendMotor(MotorSend *motorsend){//发送对应的MotorSend结构体
 CAN_SendMessage(motorsend->data,motorsend->StdId);
 }
 void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
-  motor->rpm=((int16_t)data[2]<<8)|data[3];
-  motor->torque=((int16_t)data[4]<<8)|data[5];
-  motor->tempr=(int8_t)data[6];
-  int deltaAngle = (int)(((uint16_t)data[0]<<8)|data[1])-(int)motor->singleAngle;
-  motor->singleAngle = ((uint16_t)data[0]<<8)|data[1];
-  if(abs(deltaAngle) < 4096) motor->angle += deltaAngle;
+  motor->motorState.rpm=(double)((int16_t)data[2]<<8|data[3]);
+  motor->motorState.torque=(double)((int16_t)data[4]<<8|data[5]);
+  motor->motorState.tempr=(int8_t)data[6];
+  int deltaAngle = (int)(((uint16_t)data[0]<<8)|data[1])-(int)motor->motorState.singleAngle;
+  motor->motorState.singleAngle = ((uint16_t)data[0]<<8)|data[1];
+  if(abs(deltaAngle) < 4096) motor->motorState.angle += deltaAngle;
 
 }
 /* USER CODE END PM */
@@ -106,6 +164,9 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
     uint8_t ReData[8];
     int ARR =999;
     int CanSendCounter=0;
+    
+    // 双环控制的外部速度环PID实体
+    Pid outerSpeedPid;
 
 /* USER CODE END PV */
 
@@ -113,6 +174,8 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
 void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
+void PidCalculate(Pid *pid);
+void MotorSetOutput(Motor *motor, enum PidMode mode, double value);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -152,6 +215,7 @@ int main(void)
   MX_CAN2_Init();
   MX_TIM2_Init();
   MX_CAN1_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   // 调整 CAN 接收优先级高于 TIM2 发送
 /*   HAL_NVIC_SetPriority(CAN2_RX0_IRQn, 0, 0); 
@@ -301,53 +365,117 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK)
     {
       // TODO: 在这里处理接收到的数据 RxData
-      if(RxHeader.StdId==0x201){
-        RecReceiveMotor(&fric1,RxData);
-      }else if(RxHeader.StdId==0x202){
-        RecReceiveMotor(&fric2,RxData);
-      }else if(RxHeader.StdId==0x203){
-        RecReceiveMotor(&fric3,RxData);
-      }else if(RxHeader.StdId==0x204){
-        RecReceiveMotor(&fric4,RxData);
-      }else if(RxHeader.StdId==0x205){
-        RecReceiveMotor(&GM6020,RxData);
-      }else if(RxHeader.StdId==0x206){
-        RecReceiveMotor(&load,RxData);
-      }else if(RxHeader.StdId==0x207){
-        RecReceiveMotor(&lift,RxData);
-      }
+      RecReceiveMotor(motor_array[RxHeader.StdId - 0x201],RxData);
     }
+  }
+}
+
+void PidCalculate(Pid *pid){
+  if (pid->inputAdress == NULL) return;
+  double measure = *pid->inputAdress;
+  pid->error = pid->setpoint - measure;
+  pid->integral += pid->error;
+  if(pid->integral > pid->intergralLimit) pid->integral = pid->intergralLimit;
+  if(pid->integral < -pid->intergralLimit) pid->integral = -pid->intergralLimit;
+  
+  pid->output = pid->Kp * pid->error + pid->Ki * pid->integral + pid->Kd * (pid->error - pid->error_last);
+  pid->error_last = pid->error;
+  
+  if(pid->output > pid->maxOutput) pid->output = pid->maxOutput;
+  if(pid->output < -pid->maxOutput) pid->output = -pid->maxOutput;
+  
+  if (pid->outputAdress != NULL) *pid->outputAdress = pid->output;
+}
+
+void MotorSetOutput(Motor *motor, enum PidMode mode, double value){
+  motor->motorState.pidMode = mode;
+  switch (mode)
+  {
+  case disable:
+    motor->output = 0;
+    break;
+  case currentMode:
+    motor->output = value;
+    break;
+  case angleMode:
+    motor->anglePid.setpoint = value;
+    motor->anglePid.inputAdress = &motor->motorState.angle;
+    motor->anglePid.outputAdress = &motor->output;
+    break;
+  case speedMode:
+    motor->speedPid.setpoint = value;
+    motor->speedPid.inputAdress = &motor->motorState.rpm;
+    motor->speedPid.outputAdress = &motor->output;
+    break;
+  case torqueMode:
+    motor->torquePid.setpoint = value;
+    motor->torquePid.inputAdress = &motor->motorState.torque;
+    motor->torquePid.outputAdress = &motor->output;
+    break;
+  default:
+    break;
   }
 }
 
 void MotorUpdate(void const * argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  static int buzzer_tick = 0;
+  int alarm_level = 0; // 0:None, 1:Temp, 2:Torque
+
+  // 确保开启 TIM4 CH3 的 PWM 输出
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+
   /* Infinite loop */
   for(;;)
   {
-    /* GM6020.data[0]= (current_value >> 8) & 0xFF;
-    GM6020.data[1]= current_value & 0xFF;
-    fric1.data[0]= (current_value >> 8) & 0xFF;
-    fric1.data[1]= current_value & 0xFF;
-    fric2.data[0]= (current_value >> 8) & 0xFF;
-    fric2.data[1]= current_value & 0xFF;
-    fric3.data[0]= (current_value >> 8) & 0xFF;
-    fric3.data[1]= current_value & 0xFF;
-    fric4.data[0]= (current_value >> 8) & 0xFF;
-    fric4.data[1]= current_value & 0xFF;
-    lift.data[0]= (current_value >> 8) & 0xFF;
-    lift.data[1]= current_value & 0xFF; */
-    load.data[0]= (current_value >> 8) & 0xFF;
-    load.data[1]= current_value & 0xFF;
+    alarm_level = 0; // 每个循环重置报警等级，重新检测
 
-    TransferToMotorSend(&GM6020);
-    TransferToMotorSend(&fric1);
-    TransferToMotorSend(&fric2);
-    TransferToMotorSend(&fric3);
-    TransferToMotorSend(&fric4);
-    TransferToMotorSend(&lift);
-    TransferToMotorSend(&load);
+    for(int i=0;i<MOTOR_NUM;i++){
+      Motor *m = motor_array[i];
+      // PID calculation moved to StartPidTask
+      
+      // Safety Checks
+      // 如果超过温度阈值或者扭矩阈值
+      if (m->motorState.tempr > m->maxTemp || abs((int)m->motorState.torque) > m->maxTorque) {
+          m->enabled = 0; // 立即禁用电机
+          
+          // 判定报警类型优先级：扭矩(2) > 温度(1)
+          if (abs((int)m->motorState.torque) > m->maxTorque) {
+             alarm_level = 2; 
+          } else if (alarm_level < 2) {
+             alarm_level = 1;
+          }
+      }
+
+      if (m->enabled == 0) {
+          m->output = 0;
+      }
+
+      TransferToMotorSend(m);
+    }
+
+    // --- 蜂鸣器非阻塞报警逻辑 (1ms task cycle) ---
+    buzzer_tick++;
+    if (buzzer_tick >= 1000) buzzer_tick = 0; // 1秒周期
+
+    if (alarm_level == 0) {
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 正常情况静音
+        buzzer_tick = 0; // 复位保持同步
+    } else if (alarm_level == 1) { // 温度报警：短响一次
+        // [0-200ms] 响
+        if (buzzer_tick < 200) 
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 500);
+        else 
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
+    } else if (alarm_level == 2) { // 扭矩报警：短响两次
+        // [0-100ms] 响, [100-200ms] 停, [200-300ms] 响
+        if ((buzzer_tick < 100) || (buzzer_tick >= 200 && buzzer_tick < 300))
+             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 500);
+        else 
+             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
+    }
+
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
@@ -356,17 +484,59 @@ void MotorUpdate(void const * argument)
 void StartTask2(void const * argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  // 1. 初始化电机基本结构 (StdId=0x1FE, MotorByte=0)
+  MotorInit(&GM6020, 0x1FE,0,50,10000);
+
+  // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp=10.0, MaxOut=10000
+  PidInit(&GM6020.anglePid, 10.0, 0.0, 0.0, 10000.0, 0.0, 0.0);
+  
+  // 3. 设置 GM6020 为角度模式，目标角度初始为 0 (稍后由外环控制)
+  MotorSetOutput(&GM6020, angleMode, 0);
+
+  // 4. 初始化外部速度环 PID (外环)
+  // 参数: Kp=1.0, Ki=0.0, Kd=0.0 (需根据实际调优), MaxOut=8191(角度最大值), Deadband=0, I_Limit=0
+  PidInit(&outerSpeedPid, 1.0, 0.0, 0.0, 8191.0, 0.0, 0.0);
+  
+  // 5. 绑定 PID 指针：外环输出 -> 内环输入
+  outerSpeedPid.inputAdress = &GM6020.motorState.rpm;       // 输入：当前 RPM
+  outerSpeedPid.outputAdress = &GM6020.anglePid.setpoint;   // 输出：角度环的目标值(Setpoint)
+  
+  // 6. 设定外环目标值
+  outerSpeedPid.setpoint = 100.0; // 例如：目标 100 RPM
+
   /* Infinite loop */
   for(;;)
-  {
-    static int a = 0;
-    a++;
-    osDelay(1000);
-    current_value = +A;
-    osDelay(1000);
-    current_value = -A;
-    
-    __HAL_TIM_SET_AUTORELOAD(&htim2, ARR);
+  {//主程序在此处编写
+    // 可以在这里改变 outerSpeedPid.setpoint 来动态调整速度
+    osDelay(1);
+  }
+  /* USER CODE END StartDefaultTask */
+}
+void StartPidTask(void const * argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+  /* Infinite loop */
+  for(;;)
+  {//在此处计算PID参数
+    // 计算自定义的 PID (需在电机PID之前计算，以便将输出作为电机PID的输入)
+    PidCalculate(&outerSpeedPid);
+
+    for(int i=0; i<MOTOR_NUM; i++){
+       Motor *m = motor_array[i];
+       switch(m->motorState.pidMode){
+         case angleMode:
+           PidCalculate(&m->anglePid);
+           break;
+         case speedMode:
+           PidCalculate(&m->speedPid);
+           break;
+         case torqueMode:
+           PidCalculate(&m->torquePid);
+           break;
+         default:
+           break;
+       }
+    }
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
@@ -385,11 +555,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
   if (htim->Instance == TIM2)
-  {
+  {//由TIM2中断触发循环发送MotorSend存储池中存储的发送数据
     CanSendCounter++;
-    CanSendMotor(&_1FE);
+    for(int i=0;i<MOTOR_SEND_NUM;i++){
+      CanSendMotor(motor_send_array[i]);
+    }
+/*     CanSendMotor(&_1FE);
     CanSendMotor(&_1FF);
-    CanSendMotor(&_200);
+    CanSendMotor(&_200); */
   }
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1)
