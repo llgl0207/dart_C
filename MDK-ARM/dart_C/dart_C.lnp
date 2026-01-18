@@ -1,0 +1,26 @@
+--cpu=Cortex-M4.fp
+"dart_c\startup_stm32f407xx.o"
+"dart_c\main.o"
+"dart_c\gpio.o"
+"dart_c\can.o"
+"dart_c\stm32f4xx_it.o"
+"dart_c\stm32f4xx_hal_msp.o"
+"dart_c\stm32f4xx_hal_can.o"
+"dart_c\stm32f4xx_hal_rcc.o"
+"dart_c\stm32f4xx_hal_rcc_ex.o"
+"dart_c\stm32f4xx_hal_flash.o"
+"dart_c\stm32f4xx_hal_flash_ex.o"
+"dart_c\stm32f4xx_hal_flash_ramfunc.o"
+"dart_c\stm32f4xx_hal_gpio.o"
+"dart_c\stm32f4xx_hal_dma_ex.o"
+"dart_c\stm32f4xx_hal_dma.o"
+"dart_c\stm32f4xx_hal_pwr.o"
+"dart_c\stm32f4xx_hal_pwr_ex.o"
+"dart_c\stm32f4xx_hal_cortex.o"
+"dart_c\stm32f4xx_hal.o"
+"dart_c\stm32f4xx_hal_exti.o"
+"dart_c\system_stm32f4xx.o"
+--strict --scatter "dart_C\dart_C.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "dart_C.map" -o dart_C\dart_C.axf
