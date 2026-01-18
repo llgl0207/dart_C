@@ -25,7 +25,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "math.h"
+#include "stdlib.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,6 +39,11 @@ typedef struct{
       uint8_t data[2];
       uint32_t StdId;
       uint8_t motor_byte;
+      uint16_t singleAngle;
+      int16_t rpm;
+      int16_t torque;
+      int8_t tempr;
+      uint32_t angle;
     }Motor;//对应每个电机的结构体
 
     MotorSend _1FE={{0x00},0x1FE},
@@ -48,7 +54,7 @@ typedef struct{
     fric1={{0x00,0x00},0x200,0},
     fric2={{0x00,0x00},0x200,2},
     fric3={{0x00,0x00},0x200,4},
-    firc4={{0x00,0x00},0x200,6},
+    fric4={{0x00,0x00},0x200,6},
     lift={{0x00,0x00},0x1FF,4},
     load={{0x00,0x00},0x1FF,2};
 /* USER CODE END PTD */
@@ -76,6 +82,15 @@ void TransferToMotorSend(Motor *motor){//根据电机的StdId来决定发送到�
 void CanSendMotor(MotorSend *motorsend){//发送对应的MotorSend结构体
 CAN_SendMessage(motorsend->data,motorsend->StdId);
 }
+void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
+  motor->rpm=((int16_t)data[2]<<8)|data[3];
+  motor->torque=((int16_t)data[4]<<8)|data[5];
+  motor->tempr=(int8_t)data[6];
+  uint16_t deltaAngle = ((uint16_t)data[0]<<8)|data[1]- motor->singleAngle;
+  motor->singleAngle = ((uint16_t)data[0]<<8)|data[1];
+  if(abs(deltaAngle) < 4096) motor->angle += deltaAngle;
+
+}
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -85,14 +100,12 @@ CAN_SendMessage(motorsend->data,motorsend->StdId);
     
     uint8_t high,low;
     int16_t current_value = 0;
-    volatile int counter=0;
-    volatile int counter1=0;
     int A=0;
     CAN_TxHeaderTypeDef TxHeader;
     uint32_t ReID=0x205;
     uint8_t ReData[8];
     int ARR =999;
-
+    int CanSendCounter=0;
 
 /* USER CODE END PV */
 
@@ -287,17 +300,22 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK)
     {
-      counter++;
       // TODO: 在这里处理接收到的数据 RxData
-      if(RxHeader.StdId==ReID){
-        HAL_GPIO_TogglePin(LED_R_GPIO_Port, LED_R_Pin);
-        for(int i=0;i<8;i++){
-          ReData[i]=RxData[i];
-        }
-        
-
+      if(RxHeader.StdId==0x201){
+        RecReceiveMotor(&fric1,RxData);
+      }else if(RxHeader.StdId==0x202){
+        RecReceiveMotor(&fric2,RxData);
+      }else if(RxHeader.StdId==0x203){
+        RecReceiveMotor(&fric3,RxData);
+      }else if(RxHeader.StdId==0x204){
+        RecReceiveMotor(&fric4,RxData);
+      }else if(RxHeader.StdId==0x205){
+        RecReceiveMotor(&GM6020,RxData);
+      }else if(RxHeader.StdId==0x206){
+        RecReceiveMotor(&load,RxData);
+      }else if(RxHeader.StdId==0x207){
+        RecReceiveMotor(&lift,RxData);
       }
-      
     }
   }
 }
@@ -316,17 +334,18 @@ void MotorUpdate(void const * argument)
     fric2.data[1]= current_value & 0xFF;
     fric3.data[0]= (current_value >> 8) & 0xFF;
     fric3.data[1]= current_value & 0xFF;
-    firc4.data[0]= (current_value >> 8) & 0xFF;
-    firc4.data[1]= current_value & 0xFF;
+    fric4.data[0]= (current_value >> 8) & 0xFF;
+    fric4.data[1]= current_value & 0xFF;
     lift.data[0]= (current_value >> 8) & 0xFF;
     lift.data[1]= current_value & 0xFF; */
     load.data[0]= (current_value >> 8) & 0xFF;
     load.data[1]= current_value & 0xFF;
+
     TransferToMotorSend(&GM6020);
     TransferToMotorSend(&fric1);
     TransferToMotorSend(&fric2);
     TransferToMotorSend(&fric3);
-    TransferToMotorSend(&firc4);
+    TransferToMotorSend(&fric4);
     TransferToMotorSend(&lift);
     TransferToMotorSend(&load);
     osDelay(1);
@@ -367,6 +386,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE BEGIN Callback 0 */
   if (htim->Instance == TIM2)
   {
+    CanSendCounter++;
     CanSendMotor(&_1FE);
     CanSendMotor(&_1FF);
     CanSendMotor(&_200);
