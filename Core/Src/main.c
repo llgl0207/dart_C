@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "can.h"
 #include "tim.h"
 #include "gpio.h"
@@ -29,7 +30,27 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct{
+      uint8_t data[8];
+      uint32_t StdId;
+    }MotorSend;//对应标志位的要发送的数据结构体
+    typedef struct{
+      uint8_t data[2];
+      uint32_t StdId;
+      uint8_t motor_byte;
+    }Motor;//对应每个电机的结构体
 
+    MotorSend _1FE={{0x00},0x1FE},
+    _1FF={{0x00},0x1FF},
+    _200={{0x00},0x200};
+    Motor 
+    GM6020={{0x00,0x00},0x1FE,0},
+    fric1={{0x00,0x00},0x200,0},
+    fric2={{0x00,0x00},0x200,2},
+    fric3={{0x00,0x00},0x200,4},
+    firc4={{0x00,0x00},0x200,6},
+    lift={{0x00,0x00},0x1FF,4},
+    load={{0x00,0x00},0x1FF,2};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -39,12 +60,29 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+void CAN_SendMessage(uint8_t *data, uint32_t StdId);
+void TransferToMotorSend(Motor *motor){//根据电机的StdId来决定发送到哪个MotorSend结构体中
+  if(motor->StdId==0x1FE){
+    _1FE.data[motor->motor_byte]=motor->data[0];
+    _1FE.data[motor->motor_byte+1]=motor->data[1];
+  }else if(motor->StdId==0x1FF){
+    _1FF.data[motor->motor_byte]=motor->data[0];
+    _1FF.data[motor->motor_byte+1]=motor->data[1];
+  }else if(motor->StdId==0x200){
+    _200.data[motor->motor_byte]=motor->data[0];
+    _200.data[motor->motor_byte+1]=motor->data[1];
+  }
+}
+void CanSendMotor(MotorSend *motorsend){//发送对应的MotorSend结构体
+CAN_SendMessage(motorsend->data,motorsend->StdId);
+}
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+    
+    
     uint8_t high,low;
     int16_t current_value = 0;
     volatile int counter=0;
@@ -54,12 +92,14 @@
     uint32_t ReID=0x205;
     uint8_t ReData[8];
     int ARR =999;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
-void CAN_SendMessage(uint8_t *data);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -147,6 +187,14 @@ int main(void)
   }
   /* USER CODE END 2 */
 
+  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -154,13 +202,7 @@ int main(void)
     //HAL_Delay(1);
     //HAL_GPIO_TogglePin(LED_R_GPIO_Port, LED_R_Pin);
     //HAL_Delay(10);
-    static int a = 0;
-    a++;
-    HAL_Delay(1000);
-    current_value = +A;
-    HAL_Delay(1000);
-    current_value = -A;
-    __HAL_TIM_SET_AUTORELOAD(&htim2, ARR);
+    
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -214,26 +256,13 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-  if (htim->Instance == TIM2)
-  {
-    counter1++;
-    uint8_t num=0x00;
-    high = (uint8_t)(current_value >> 8);
-    low = (uint8_t)(current_value);
-    //uint8_t canData[8] = {num,num,(uint8_t)(current_value>>8),(uint8_t)(current_value),num,num,num,num};
-    uint8_t canData[8] = {high,low,high,low,num,num,num,num};
-    CAN_SendMessage(canData);
-    //HAL_IncTick();
-  }
-}
-void CAN_SendMessage(uint8_t *data) {
+
+void CAN_SendMessage(uint8_t *data, uint32_t StdId) {
   //CAN_TxHeaderTypeDef TxHeader;
   uint32_t TxMailbox;
 
   // 配置发送消息头
-  TxHeader.StdId = 0x200;
+  TxHeader.StdId = StdId;
   TxHeader.ExtId = 0;
   TxHeader.IDE = CAN_ID_STD;
   TxHeader.RTR = CAN_RTR_DATA;
@@ -258,20 +287,99 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK)
     {
+      counter++;
       // TODO: 在这里处理接收到的数据 RxData
       if(RxHeader.StdId==ReID){
         HAL_GPIO_TogglePin(LED_R_GPIO_Port, LED_R_Pin);
         for(int i=0;i<8;i++){
           ReData[i]=RxData[i];
         }
-        counter++;
+        
 
       }
       
     }
   }
 }
+
+void MotorUpdate(void const * argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    /* GM6020.data[0]= (current_value >> 8) & 0xFF;
+    GM6020.data[1]= current_value & 0xFF;
+    fric1.data[0]= (current_value >> 8) & 0xFF;
+    fric1.data[1]= current_value & 0xFF;
+    fric2.data[0]= (current_value >> 8) & 0xFF;
+    fric2.data[1]= current_value & 0xFF;
+    fric3.data[0]= (current_value >> 8) & 0xFF;
+    fric3.data[1]= current_value & 0xFF;
+    firc4.data[0]= (current_value >> 8) & 0xFF;
+    firc4.data[1]= current_value & 0xFF;
+    lift.data[0]= (current_value >> 8) & 0xFF;
+    lift.data[1]= current_value & 0xFF; */
+    load.data[0]= (current_value >> 8) & 0xFF;
+    load.data[1]= current_value & 0xFF;
+    TransferToMotorSend(&GM6020);
+    TransferToMotorSend(&fric1);
+    TransferToMotorSend(&fric2);
+    TransferToMotorSend(&fric3);
+    TransferToMotorSend(&firc4);
+    TransferToMotorSend(&lift);
+    TransferToMotorSend(&load);
+    osDelay(1);
+  }
+  /* USER CODE END StartDefaultTask */
+}
+
+void StartTask2(void const * argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    static int a = 0;
+    a++;
+    osDelay(1000);
+    current_value = +A;
+    osDelay(1000);
+    current_value = -A;
+    
+    __HAL_TIM_SET_AUTORELOAD(&htim2, ARR);
+    osDelay(1);
+  }
+  /* USER CODE END StartDefaultTask */
+}
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM1 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+  if (htim->Instance == TIM2)
+  {
+    CanSendMotor(&_1FE);
+    CanSendMotor(&_1FF);
+    CanSendMotor(&_200);
+  }
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM1)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

@@ -8,11 +8,16 @@
                 "e:\\RoboMaster\\dart_C\\Drivers\\STM32F4xx_HAL_Driver\\Inc\\Legacy",
                 "e:\\RoboMaster\\dart_C\\Drivers\\CMSIS\\Device\\ST\\STM32F4xx\\Include",
                 "e:\\RoboMaster\\dart_C\\Drivers\\CMSIS\\Include",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\include",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\CMSIS_RTOS",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\portable\\RVDS\\ARM_CM4F",
                 "D:\\Program Files\\Keil_v5\\ARM\\ARMCC\\include",
                 "D:\\Program Files\\Keil_v5\\ARM\\ARMCC\\include\\rw",
                 "e:\\RoboMaster\\dart_C\\MDK-ARM",
                 "e:\\RoboMaster\\dart_C\\Core\\Src",
-                "e:\\RoboMaster\\dart_C\\Drivers\\STM32F4xx_HAL_Driver\\Src"
+                "e:\\RoboMaster\\dart_C\\Drivers\\STM32F4xx_HAL_Driver\\Src",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\portable\\MemMang"
             ],
             "defines": [
                 "USE_HAL_DRIVER",

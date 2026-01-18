@@ -17,4 +17,21 @@ version: "2.1"
 options:
     dart_C:
         files: {}
-        virtualPathFiles: {}
+        virtualPathFiles:
+            <virtual_root>/Application/User/Core/freertos.c: ""
+            <virtual_root>/Application/User/Core/can.c: ""
+            <virtual_root>/Application/User/Core/tim.c: ""
+            <virtual_root>/Application/User/Core/stm32f4xx_hal_timebase_tim.c: ""
+            <virtual_root>/Drivers/STM32F4xx_HAL_Driver/stm32f4xx_hal_tim.c: ""
+            <virtual_root>/Drivers/STM32F4xx_HAL_Driver/stm32f4xx_hal_tim_ex.c: ""
+            <virtual_root>/Drivers/STM32F4xx_HAL_Driver/stm32f4xx_hal_can.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/croutine.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/event_groups.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/list.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/queue.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/stream_buffer.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/tasks.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/timers.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/cmsis_os.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/heap_4.c: ""
+            <virtual_root>/Middlewares/FreeRTOS/port.c: ""

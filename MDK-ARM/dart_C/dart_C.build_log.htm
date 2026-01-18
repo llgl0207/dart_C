@@ -21,19 +21,20 @@ Target DLL:      Segger\JL2CM3.dll V2.99.31.0
 Dialog DLL:      TCM.DLL V1.36.1.0
  
 <h2>Project:</h2>
-E:\github\llgl0207_program_work\dart_C\MDK-ARM\dart_C.uvprojx
-Project File Date:  01/17/2026
+E:\RoboMaster\dart_C\MDK-ARM\dart_C.uvprojx
+Project File Date:  01/18/2026
 
 <h2>Output:</h2>
 *** Using Compiler 'V5.06 update 6 (build 750)', folder: 'D:\Program Files\Keil_v5\ARM\ARMCC\Bin'
 Build target 'dart_C'
-assembling startup_stm32f407xx.s...
 compiling main.c...
-compiling can.c...
+../Core/Src/main.c(310): warning:  #177-D: variable "num"  was declared but never referenced
+      uint8_t num=0x00;
+../Core/Src/main.c: 1 warning, 0 errors
 linking...
-Program Size: Code=3714 RO-data=442 RW-data=20 ZI-data=1676  
+Program Size: Code=10424 RO-data=524 RW-data=168 ZI-data=18080  
 FromELF: creating hex file...
-"dart_C\dart_C.axf" - 0 Error(s), 0 Warning(s).
+"dart_C\dart_C.axf" - 0 Error(s), 1 Warning(s).
 
 <h2>Software Packages used:</h2>
 
@@ -56,7 +57,7 @@ Package Vendor: Keil
 <h2>Collection of Component Files used:</h2>
 
    * Component: ARM::CMSIS:CORE:5.1.2
-Build Time Elapsed:  00:00:02
+Build Time Elapsed:  00:00:03
 </pre>
 </body>
 </html>
