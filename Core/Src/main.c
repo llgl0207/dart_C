@@ -43,7 +43,7 @@ typedef struct{
       int16_t rpm;
       int16_t torque;
       int8_t tempr;
-      uint32_t angle;
+      int angle;
     }Motor;//对应每个电机的结构体
 
     MotorSend _1FE={{0x00},0x1FE},
@@ -86,7 +86,7 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
   motor->rpm=((int16_t)data[2]<<8)|data[3];
   motor->torque=((int16_t)data[4]<<8)|data[5];
   motor->tempr=(int8_t)data[6];
-  uint16_t deltaAngle = ((uint16_t)data[0]<<8)|data[1]- motor->singleAngle;
+  int deltaAngle = (int)(((uint16_t)data[0]<<8)|data[1])-(int)motor->singleAngle;
   motor->singleAngle = ((uint16_t)data[0]<<8)|data[1];
   if(abs(deltaAngle) < 4096) motor->angle += deltaAngle;
 
