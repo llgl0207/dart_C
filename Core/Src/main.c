@@ -165,6 +165,8 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
 /* USER CODE BEGIN PV */
     
     int alarm_level = 0; // 0:None, 1:Temp, 2:Torque//用于报警
+    short int alarm_motor = -1; // 报警电机编号
+    uint16_t alarm_counter = 0; // 报警计数器
 
 
 
@@ -438,7 +440,7 @@ void MotorUpdate(void const * argument)
   /* USER CODE BEGIN StartDefaultTask */
   static int buzzer_tick = 0;
   alarm_level = 0;
-
+  osDelay(1000);
   // 确保开启 TIM4 CH3 的 PWM 输出
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
 
@@ -469,12 +471,17 @@ void MotorUpdate(void const * argument)
       if (m->motorState.tempr > m->maxTemp){
         m->enabled = 0; // 立即禁用电机
         alarm_level = 1;
+        alarm_motor = i;
+        alarm_counter++;
       }
       // double torque = fabs(m->motorState.torque); // Unused
       // double maxTorque = m->maxTorque; // Unused
       if (fabs(m->motorState.torque) > m->maxTorque) {
         m->enabled = 0; // 立即禁用电机
-        alarm_level = 2; }
+        alarm_level = 2;
+        alarm_motor = i;
+        alarm_counter++;
+      }
       
 
       if (m->enabled == 0) {
@@ -519,12 +526,13 @@ void StartTask2(void const * argument)
   MotorInit(&fric3, 0x200, 4, 50, 5000.0, 8000.0, 1000);
   MotorInit(&fric4, 0x200, 6, 50, 5000.0, 8000.0, 1000);
   MotorInit(&lift, 0x1FF, 4, 50, 5000.0, 8000.0, 1000);
+  lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2, 50, 5000.0, 8000.0, 1000);
   load.enabled=0; // 装弹电机初始禁用
-  MotorInit(&GM6020, 0x1FE, 0, 50, 5000.0, 8000.0, 1000);
+  MotorInit(&GM6020, 0x1FE, 0, 50, 3000.0, 2000.0, 1000);
 
-  // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp=1.0,Ki=0.0,Kd=0.0, MaxOut=1000, Deadband=0, I_Limit=0
-  PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 3000.0, 0.0, 0.0);
+  // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp,Ki,Kd,MaxOut,Deadband,I_Limit
+  PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&fric2.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&fric3.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
@@ -557,7 +565,7 @@ void StartTask2(void const * argument)
   for(;;)
   {//主程序在此处编写
     // 可以在这里改变 outerSpeedPid.setpoint 来动态调整速度
-    alarm_level = 1; // 测试报警
+    //alarm_level = 2; // 测试报警
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
