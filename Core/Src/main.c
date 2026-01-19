@@ -644,7 +644,7 @@ void StartTask2(void const * argument)
   MotorInit(&fric4, 0x200, 6);
   MotorSafetyInit(&fric4, 35, 5000, 500, 50, 500);
   MotorInit(&lift, 0x1FF, 4);
-  MotorSafetyInit(&lift, 35, 5000, 500, 50, 1000);
+  MotorSafetyInit(&lift, 35, 5000, 500, 50, 500);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
   MotorSafetyInit(&load, 35, 5000, 500, 50, 500);
@@ -695,11 +695,11 @@ void StartTask2(void const * argument)
   /////////////////////////以下为主程序////////////////////////////
   //上电初始化，GM6020和lift走到负方向限位
   MotorRunToStall(&GM6020,-300);
-  MotorRunToStall(&lift,4000);
-  MotorRunToStall(&lift,-4000);
   GM6020.motorState.angle=0;
-  lift.motorState.angle=0;
   MotorRunToAngle(&GM6020,245000,300);
+  MotorRunToStall(&lift,6000);
+  MotorRunToStall(&lift,-6000);
+  lift.motorState.angle=0;
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET); // 指示初始化完成
   osDelay(1000);
   MotorSetOutput(&fric1, speedMode, 2000);
