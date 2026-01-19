@@ -164,7 +164,7 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
 
 /* USER CODE BEGIN PV */
     
-    int alarm_level = 0; // 0:None, 1:Temp, 2:Torque//用于报警
+    int alarm_level = 0; // 0:None, 1:Temp, 2:Torque, 3:EXTI//用于报警
     short int alarm_motor = -1; // 报警电机编号
     uint16_t alarm_counter = 0; // 报警计数器
 
@@ -387,14 +387,26 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   }
 }
 
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if(GPIO_Pin == KEY_Pin){
+    alarm_level = 3; // 设置最高优先级报警（按键触发）
+    for(int i=0;i<MOTOR_NUM;i++){
+      motor_array[i]->enabled=0;
+    }
+  }
+}
+
 void PidCalculate(Pid *pid){
   if (pid->inputAdress == NULL) return;
   double measure = *pid->inputAdress;
   pid->error = pid->setpoint - measure;
   if(fabs(pid->error)>pid->deadband)pid->integral += pid->error;
-  if(pid->integral*pid->Ki > pid->intergralLimit) pid->integral = pid->intergralLimit/pid->Ki;
-  else
-  if(pid->integral*pid->Ki < -pid->intergralLimit) pid->integral = -pid->intergralLimit/pid->Ki;
+  
+  if (pid->Ki != 0) {
+    if(pid->integral*pid->Ki > pid->intergralLimit) pid->integral = pid->intergralLimit/pid->Ki;
+    else if(pid->integral*pid->Ki < -pid->intergralLimit) pid->integral = -pid->intergralLimit/pid->Ki;
+  }
   
   if(fabs(pid->error)>pid->deadband)pid->output = pid->Kp * pid->error + pid->Ki * pid->integral + pid->Kd * (pid->error - pid->error_last);
   pid->error_last = pid->error;
@@ -447,7 +459,7 @@ void MotorUpdate(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    //alarm_level = 0; // 每个循环重置报警等级，重新检测
+    // alarm_level 不在每次循环重置，保持报警状态直到系统复位或手动清除
 
     for(int i=0;i<MOTOR_NUM;i++){
       Motor *m = motor_array[i];
@@ -470,16 +482,15 @@ void MotorUpdate(void const * argument)
       // 注意：堵转(isStalled)不再触发禁用或报警
       if (m->motorState.tempr > m->maxTemp){
         m->enabled = 0; // 立即禁用电机
-        alarm_level = 1;
-        alarm_motor = i;
+        if (alarm_level < 1) alarm_level = 1; // 仅升级报警等级，不降级
+        alarm_motor = i+1;
         alarm_counter++;
       }
-      // double torque = fabs(m->motorState.torque); // Unused
-      // double maxTorque = m->maxTorque; // Unused
+      
       if (fabs(m->motorState.torque) > m->maxTorque) {
         m->enabled = 0; // 立即禁用电机
-        alarm_level = 2;
-        alarm_motor = i;
+        if (alarm_level < 2) alarm_level = 2; // 仅升级报警等级，不降级（扭矩优于温度）
+        alarm_motor = i+1;
         alarm_counter++;
       }
       
@@ -492,24 +503,41 @@ void MotorUpdate(void const * argument)
     }
 
     // --- 蜂鸣器非阻塞报警逻辑 (1ms task cycle) ---
+    // 兼容 1-10 次短响逻辑: 每次短响占用 200ms (100ms ON, 100ms OFF)
+    // 最大 10 次需要 2000ms 周期。为了简化，如果 alarm_level > 0，则按 alarm_level * 200ms + 500ms(间隔) 计算周期
+    // buzzer_tick 单位: ms
+    
     buzzer_tick++;
-    if (buzzer_tick >= 1000) buzzer_tick = 0; // 1秒周期
+    int cycle_period = 1000;
+    if (alarm_level > 0) {
+        cycle_period = alarm_level * 200 + 800; // 动态周期，保证响完后有一段静音
+    }
+    
+    if (buzzer_tick >= cycle_period) buzzer_tick = 0; 
 
     if (alarm_level == 0) {
         __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 正常情况静音
         buzzer_tick = 0; // 复位保持同步
-    } else if (alarm_level == 1) { // 温度报警：短响一次
-        // [0-200ms] 响
-        if (buzzer_tick < 200) 
-            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 500);
-        else 
+    } else {
+        // 通用报警逻辑：响 alarm_level 次
+        // 例如 alarm_level = 3: 
+        // 0-100: ON, 100-200: OFF
+        // 200-300: ON, 300-400: OFF
+        // 400-500: ON, 500-600: OFF
+        // >600: OFF (直到 cycle_period)
+        
+        // 判断当前时刻是否在所有响声的时间段内
+        if (buzzer_tick < (alarm_level * 200)) {
+            // 在响声时间段内，判断是 ON 还是 OFF
+            if ((buzzer_tick % 200) < 100) {
+                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 500); // ON
+            } else {
+                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);   // OFF
+            }
+        } else {
+            // 超过响声时间段，保持静音
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
-    } else if (alarm_level == 2) { // 扭矩报警：短响两次
-        // [0-100ms] 响, [100-200ms] 停, [200-300ms] 响
-        if ((buzzer_tick < 100) || (buzzer_tick >= 200 && buzzer_tick < 300))
-             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 500);
-        else 
-             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
+        }
     }
 
     osDelay(1);
