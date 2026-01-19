@@ -11,13 +11,19 @@
                 "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\include",
                 "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\CMSIS_RTOS",
                 "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\portable\\RVDS\\ARM_CM4F",
+                "e:\\RoboMaster\\dart_C\\USB_DEVICE\\App",
+                "e:\\RoboMaster\\dart_C\\USB_DEVICE\\Target",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Inc",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Inc",
                 "D:\\Program Files\\Keil_v5\\ARM\\ARMCC\\include",
                 "D:\\Program Files\\Keil_v5\\ARM\\ARMCC\\include\\rw",
                 "e:\\RoboMaster\\dart_C\\MDK-ARM",
                 "e:\\RoboMaster\\dart_C\\Core\\Src",
                 "e:\\RoboMaster\\dart_C\\Drivers\\STM32F4xx_HAL_Driver\\Src",
                 "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source",
-                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\portable\\MemMang"
+                "e:\\RoboMaster\\dart_C\\Middlewares\\Third_Party\\FreeRTOS\\Source\\portable\\MemMang",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\ST\\STM32_USB_Device_Library\\Core\\Src",
+                "e:\\RoboMaster\\dart_C\\Middlewares\\ST\\STM32_USB_Device_Library\\Class\\CDC\\Src"
             ],
             "defines": [
                 "USE_HAL_DRIVER",

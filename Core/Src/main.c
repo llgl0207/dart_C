@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "can.h"
 #include "tim.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -58,14 +59,18 @@ typedef struct{
   int8_t tempr;
   double angle;
   enum PidMode pidMode;
+  uint8_t isStalled; // 是否堵转
+  uint32_t stallTimer; // 堵转计时
 }MotorState;//存储电机状态的结构体
 typedef struct{
   double output;
   uint32_t StdId;
   uint8_t motor_byte;
   uint8_t enabled; //使能
-  uint8_t maxTemp; // 温度阈值
+  int8_t maxTemp; // 温度阈值
   double maxTorque; // 转矩阈值
+  double stallTorque; // 堵转转矩阈值
+  uint32_t stallTimeThreshold; // 堵转时间阈值(ms)
   MotorState motorState;
   Pid anglePid,speedPid,torquePid;
 }Motor;//对应每个电机的结构体
@@ -102,7 +107,7 @@ void PidInit(Pid *pid,double Kp,double Ki,double Kd,double maxOutput,double dead
   pid->deadband=deadband;
   pid->intergralLimit=intergralLimit;
 }
-void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,double maxTorque){//初始化电机结构体
+void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,double maxTorque, double stallTorque, uint32_t stallTimeThreshold){//初始化电机结构体
   motor->StdId=StdId;
   motor->motor_byte=motor_byte;
   motor->motorState.pidMode=disable;
@@ -114,6 +119,10 @@ void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,do
   motor->enabled = 1;
   motor->maxTemp = maxTemp;
   motor->maxTorque = maxTorque;
+  motor->stallTorque = stallTorque;
+  motor->stallTimeThreshold = stallTimeThreshold;
+  motor->motorState.isStalled = 0;
+  motor->motorState.stallTimer = 0;
   
   // 初始化PID指针为空，防止未配置模式时误计算
   motor->anglePid.inputAdress = NULL;
@@ -141,8 +150,8 @@ void CanSendMotor(MotorSend *motorsend){//发送对应的MotorSend结构体
 CAN_SendMessage(motorsend->data,motorsend->StdId);
 }
 void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
-  motor->motorState.rpm=(double)((int16_t)data[2]<<8|data[3]);
-  motor->motorState.torque=(double)((int16_t)data[4]<<8|data[5]);
+  motor->motorState.rpm=(double)(int16_t)((data[2]<<8)|data[3]);
+  motor->motorState.torque=(double)(int16_t)((data[4]<<8)|data[5]);
   motor->motorState.tempr=(int8_t)data[6];
   int deltaAngle = (int)(((uint16_t)data[0]<<8)|data[1])-(int)motor->motorState.singleAngle;
   motor->motorState.singleAngle = ((uint16_t)data[0]<<8)|data[1];
@@ -155,7 +164,12 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
 
 /* USER CODE BEGIN PV */
     
-    
+    int alarm_level = 0; // 0:None, 1:Temp, 2:Torque//用于报警
+
+
+
+
+
     uint8_t high,low;
     int16_t current_value = 0;
     int A=0;
@@ -166,7 +180,7 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
     int CanSendCounter=0;
     
     // 双环控制的外部速度环PID实体
-    Pid outerSpeedPid;
+    //Pid outerSpeedPid;
 
 /* USER CODE END PV */
 
@@ -216,6 +230,7 @@ int main(void)
   MX_TIM2_Init();
   MX_CAN1_Init();
   MX_TIM4_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   // 调整 CAN 接收优先级高于 TIM2 发送
 /*   HAL_NVIC_SetPriority(CAN2_RX0_IRQn, 0, 0); 
@@ -311,7 +326,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 6;
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLQ = 7;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -374,11 +389,12 @@ void PidCalculate(Pid *pid){
   if (pid->inputAdress == NULL) return;
   double measure = *pid->inputAdress;
   pid->error = pid->setpoint - measure;
-  pid->integral += pid->error;
-  if(pid->integral > pid->intergralLimit) pid->integral = pid->intergralLimit;
-  if(pid->integral < -pid->intergralLimit) pid->integral = -pid->intergralLimit;
+  if(fabs(pid->error)>pid->deadband)pid->integral += pid->error;
+  if(pid->integral*pid->Ki > pid->intergralLimit) pid->integral = pid->intergralLimit/pid->Ki;
+  else
+  if(pid->integral*pid->Ki < -pid->intergralLimit) pid->integral = -pid->intergralLimit/pid->Ki;
   
-  pid->output = pid->Kp * pid->error + pid->Ki * pid->integral + pid->Kd * (pid->error - pid->error_last);
+  if(fabs(pid->error)>pid->deadband)pid->output = pid->Kp * pid->error + pid->Ki * pid->integral + pid->Kd * (pid->error - pid->error_last);
   pid->error_last = pid->error;
   
   if(pid->output > pid->maxOutput) pid->output = pid->maxOutput;
@@ -421,7 +437,7 @@ void MotorUpdate(void const * argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   static int buzzer_tick = 0;
-  int alarm_level = 0; // 0:None, 1:Temp, 2:Torque
+  alarm_level = 0;
 
   // 确保开启 TIM4 CH3 的 PWM 输出
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
@@ -429,24 +445,37 @@ void MotorUpdate(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    alarm_level = 0; // 每个循环重置报警等级，重新检测
+    //alarm_level = 0; // 每个循环重置报警等级，重新检测
 
     for(int i=0;i<MOTOR_NUM;i++){
       Motor *m = motor_array[i];
       // PID calculation moved to StartPidTask
       
       // Safety Checks
-      // 如果超过温度阈值或者扭矩阈值
-      if (m->motorState.tempr > m->maxTemp || abs((int)m->motorState.torque) > m->maxTorque) {
-          m->enabled = 0; // 立即禁用电机
-          
-          // 判定报警类型优先级：扭矩(2) > 温度(1)
-          if (abs((int)m->motorState.torque) > m->maxTorque) {
-             alarm_level = 2; 
-          } else if (alarm_level < 2) {
-             alarm_level = 1;
-          }
+      // 1. 堵转检测
+      if (abs((int)m->motorState.torque) > m->stallTorque) {
+          m->motorState.stallTimer++;
+      } else {
+          m->motorState.stallTimer = 0;
+          m->motorState.isStalled = 0;
       }
+      
+      if (m->motorState.stallTimer > m->stallTimeThreshold) {
+          m->motorState.isStalled = 1;
+      }
+
+      // 2. 阈值保护 (温度 > 阈值 OR (转矩 > 阈值(瞬间)))
+      // 注意：堵转(isStalled)不再触发禁用或报警
+      if (m->motorState.tempr > m->maxTemp){
+        m->enabled = 0; // 立即禁用电机
+        alarm_level = 1;
+      }
+      // double torque = fabs(m->motorState.torque); // Unused
+      // double maxTorque = m->maxTorque; // Unused
+      if (fabs(m->motorState.torque) > m->maxTorque) {
+        m->enabled = 0; // 立即禁用电机
+        alarm_level = 2; }
+      
 
       if (m->enabled == 0) {
           m->output = 0;
@@ -484,30 +513,51 @@ void MotorUpdate(void const * argument)
 void StartTask2(void const * argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  // 1. 初始化电机基本结构 (StdId=0x1FE, MotorByte=0)
-  MotorInit(&GM6020, 0x1FE,0,50,10000);
+  // 1. 初始化电机基本结构 (StdId, MotorByte, MaxTemp, MaxTorque, StallTorque, StallTime)
+  MotorInit(&fric1, 0x200, 0, 50, 5000.0, 8000.0, 1000);
+  MotorInit(&fric2, 0x200, 2, 50, 5000.0, 8000.0, 1000);
+  MotorInit(&fric3, 0x200, 4, 50, 5000.0, 8000.0, 1000);
+  MotorInit(&fric4, 0x200, 6, 50, 5000.0, 8000.0, 1000);
+  MotorInit(&lift, 0x1FF, 4, 50, 5000.0, 8000.0, 1000);
+  MotorInit(&load, 0x1FF, 2, 50, 5000.0, 8000.0, 1000);
+  load.enabled=0; // 装弹电机初始禁用
+  MotorInit(&GM6020, 0x1FE, 0, 50, 5000.0, 8000.0, 1000);
 
-  // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp=10.0, MaxOut=10000
-  PidInit(&GM6020.anglePid, 10.0, 0.0, 0.0, 10000.0, 0.0, 0.0);
+  // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp=1.0,Ki=0.0,Kd=0.0, MaxOut=1000, Deadband=0, I_Limit=0
+  PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 3000.0, 0.0, 0.0);
+  PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric2.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric3.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric4.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&lift.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&load.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   
   // 3. 设置 GM6020 为角度模式，目标角度初始为 0 (稍后由外环控制)
   MotorSetOutput(&GM6020, angleMode, 0);
+  MotorSetOutput(&fric1, angleMode, 0);
+  MotorSetOutput(&fric2, angleMode, 0);
+  MotorSetOutput(&fric3, angleMode, 0);
+  MotorSetOutput(&fric4, angleMode, 0);
+  MotorSetOutput(&lift, angleMode, 0);
+  MotorSetOutput(&load, angleMode, 0);
 
   // 4. 初始化外部速度环 PID (外环)
   // 参数: Kp=1.0, Ki=0.0, Kd=0.0 (需根据实际调优), MaxOut=8191(角度最大值), Deadband=0, I_Limit=0
-  PidInit(&outerSpeedPid, 1.0, 0.0, 0.0, 8191.0, 0.0, 0.0);
+  //PidInit(&outerSpeedPid, 1.0, 0.0, 0.0, 8191.0, 0.0, 0.0);
   
+
   // 5. 绑定 PID 指针：外环输出 -> 内环输入
-  outerSpeedPid.inputAdress = &GM6020.motorState.rpm;       // 输入：当前 RPM
-  outerSpeedPid.outputAdress = &GM6020.anglePid.setpoint;   // 输出：角度环的目标值(Setpoint)
+  //outerSpeedPid.inputAdress = &GM6020.motorState.rpm;       // 输入：当前 RPM
+  //outerSpeedPid.outputAdress = &GM6020.anglePid.setpoint;   // 输出：角度环的目标值(Setpoint)
   
   // 6. 设定外环目标值
-  outerSpeedPid.setpoint = 100.0; // 例如：目标 100 RPM
+  //outerSpeedPid.setpoint = 100.0; // 例如：目标 100 RPM
 
   /* Infinite loop */
   for(;;)
   {//主程序在此处编写
     // 可以在这里改变 outerSpeedPid.setpoint 来动态调整速度
+    alarm_level = 1; // 测试报警
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
@@ -519,7 +569,7 @@ void StartPidTask(void const * argument)
   for(;;)
   {//在此处计算PID参数
     // 计算自定义的 PID (需在电机PID之前计算，以便将输出作为电机PID的输入)
-    PidCalculate(&outerSpeedPid);
+    //PidCalculate(&outerSpeedPid);
 
     for(int i=0; i<MOTOR_NUM; i++){
        Motor *m = motor_array[i];

@@ -31,6 +31,9 @@ dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr.h
 dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr_ex.h
 dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h
 dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h
+dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd.h
+dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_ll_usb.h
+dart_c\main.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd_ex.h
 dart_c\main.o: ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/cmsis_os.h
 dart_c\main.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
 dart_c\main.o: ../Core/Inc/FreeRTOSConfig.h
@@ -47,4 +50,11 @@ dart_c\main.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/semphr.h
 dart_c\main.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h
 dart_c\main.o: ../Core/Inc/can.h
 dart_c\main.o: ../Core/Inc/tim.h
+dart_c\main.o: ../USB_DEVICE/App/usb_device.h
+dart_c\main.o: ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_def.h
+dart_c\main.o: ../USB_DEVICE/Target/usbd_conf.h
+dart_c\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
+dart_c\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\stdlib.h
+dart_c\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
 dart_c\main.o: ../Core/Inc/gpio.h
+dart_c\main.o: D:\Program Files\Keil_v5\ARM\ARMCC\Bin\..\include\math.h
