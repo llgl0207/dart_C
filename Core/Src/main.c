@@ -170,7 +170,8 @@ void MotorRunToAngle(Motor *motor, double angle, double speed){//以指定角度
       osDelay(1);
     }
   }
-  motor->motorState.pidMode = disable;
+  motor->motorState.pidMode = angleMode;
+  motor->anglePid.setpoint = angle;
   motor->speedPid.setpoint = 0;
 }
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);
@@ -208,6 +209,7 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
     int alarm_level = 0; // 0:None, 1:Temp, 2:Torque, 3:EXTI//用于报警
     short int alarm_motor = -1; // 报警电机编号
     uint16_t alarm_counter = 0; // 报警计数器
+    uint8_t CDC_Ctrl_state = 0; // CDC使能标志
 
 
 
@@ -442,6 +444,30 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
 {
+    // 解析自定义数据包
+    // Byte 0: 0x00 (保留/帧头)
+    // Byte 1: Motor ID (0-6)
+    // Byte 2: Mode (0:Disable, 1:Current, 2:Angle, 3:Speed, 4:Torque)
+    // Byte 3-4: Value (int16, Big Endian)
+    if(CDC_Ctrl_state != 1) return; // 未连接时不处理
+    if (Len >= 5 && Buf[0] == 0x00) {
+        uint8_t motor_id = Buf[1];
+        uint8_t mode_val = Buf[2];
+        
+        if (motor_id < MOTOR_NUM) {
+            // 组合 16 位补码数值 (模拟大端序: High << 8 | Low)
+            int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
+            double val_double = (double)val_int16;
+
+            // 检查模式是否有效 (0 ~ 4)
+            if (mode_val <= 4) {
+                 // enum PidMode 定义: disable=0, currentMode=1, angleMode=2, speedMode=3, torqueMode=4
+                 // 若为 disable 模式，val_double 不影响结果，内部会设为 0
+                 MotorSetOutput(motor_array[motor_id], (enum PidMode)mode_val, val_double);
+            }
+        }
+    }
+
     // 将接收到的数据回显（Echo）
     // 注意：CDC_Transmit_FS 如果正在忙碌可能会失败，实际应用可以使用缓冲区或重试机制
     CDC_Transmit_FS(Buf, Len);
@@ -697,15 +723,15 @@ void StartTask2(void const * argument)
   MotorRunToStall(&GM6020,-300);
   GM6020.motorState.angle=0;
   MotorRunToAngle(&GM6020,245000,300);
-  MotorRunToStall(&lift,6000);
+  //MotorRunToStall(&lift,6000);
   MotorRunToStall(&lift,-6000);
   lift.motorState.angle=0;
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET); // 指示初始化完成
   osDelay(1000);
-  MotorSetOutput(&fric1, speedMode, 2000);
-  MotorSetOutput(&fric2, speedMode, 2000);
-  MotorSetOutput(&fric3, speedMode, 2000);
-  MotorSetOutput(&fric4, speedMode, 2000);
+  MotorSetOutput(&fric1, speedMode, -4000);
+  MotorSetOutput(&fric2, speedMode, -4000);
+  MotorSetOutput(&fric3, speedMode, 4000);
+  MotorSetOutput(&fric4, speedMode, 4000);
   osDelay(3000);
   MotorSetOutput(&fric1, speedMode, 0);
   MotorSetOutput(&fric2, speedMode, 0);
@@ -713,6 +739,7 @@ void StartTask2(void const * argument)
   MotorSetOutput(&fric4, speedMode, 0);
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LED_G_GPIO_Port, LED_G_Pin, GPIO_PIN_SET); // 指示准备完成
+  CDC_Ctrl_state = 1; // CDC 连接完成，允许接收控制命令
   /* Infinite loop */
   for(;;)
   {//主程序在此处编写
