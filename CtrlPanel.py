@@ -13,7 +13,7 @@ class MotorControlApp:
     def __init__(self, root):
         self.root = root
         self.root.title("RoboMaster Dart Motor Control")
-        self.root.geometry("600x450")
+        self.root.geometry("700x650")
         
         self.ser = None
         self.connected = False
@@ -23,6 +23,7 @@ class MotorControlApp:
         self.motor_id_var = tk.IntVar(value=0)
         self.mode_var = tk.StringVar(value="Disable")
         self.value_var = tk.IntVar(value=0)
+        self.yaw_angle_var = tk.DoubleVar(value=245000)
         self.log_text = None
         
         # 模式映射
@@ -31,7 +32,9 @@ class MotorControlApp:
             "Current (0x01)": 1,
             "Angle (0x02)": 2,
             "Speed (0x03)": 3,
-            "Torque (0x04)": 4
+            "Torque (0x04)": 4,
+            "RunToStall (0x05)": 5,
+            # Mode 6 is hidden from dropdown as it requires special payload
         }
         
         self.create_ui()
@@ -46,8 +49,41 @@ class MotorControlApp:
         self.btn_connect = ttk.Button(frame_conn, text="Connect", command=self.toggle_connection)
         self.btn_connect.pack(side="left", padx=5)
         
-        # 2. 控制区域
-        frame_ctrl = ttk.LabelFrame(self.root, text="Control Panel")
+        # 2. 快捷控制区域 (New Features)
+        frame_actions = ttk.LabelFrame(self.root, text="Quick Actions")
+        frame_actions.pack(fill="x", padx=10, pady=5)
+        
+        # Dart Launch Controls
+        frame_launch = ttk.Frame(frame_actions)
+        frame_launch.pack(fill="x", padx=5, pady=5)
+        ttk.Label(frame_launch, text="Dart Launch:").pack(side="left")
+        ttk.Button(frame_launch, text="Prepare Launch (Friction ON)", command=self.action_prepare_launch).pack(side="left", padx=5)
+        ttk.Button(frame_launch, text="Stop Friction (OFF)", command=self.action_stop_friction).pack(side="left", padx=5)
+        
+        # Loading Mechanism (Lift - ID 6)
+        frame_load = ttk.Frame(frame_actions)
+        frame_load.pack(fill="x", padx=5, pady=5)
+        ttk.Label(frame_load, text="Reload (Lift ID 6):").pack(side="left")
+        ttk.Button(frame_load, text="Reload 1 (Angle 4805000)", command=lambda: self.action_lift_to(4805000)).pack(side="left", padx=5)
+        ttk.Button(frame_load, text="Reload 2 (Angle 8000000)", command=lambda: self.action_lift_to(8000000)).pack(side="left", padx=5)
+        ttk.Button(frame_load, text="Reset Load (Angle 0)", command=lambda: self.action_lift_to(0)).pack(side="left", padx=5)
+        
+        # Yaw Control (ID 4)
+        frame_yaw = ttk.Frame(frame_actions)
+        frame_yaw.pack(fill="x", padx=5, pady=5)
+        ttk.Label(frame_yaw, text="Yaw Control (ID 4):").pack(side="left")
+        self.yaw_scale = ttk.Scale(frame_yaw, from_=-245000, to=245000, variable=self.yaw_angle_var, orient="horizontal", length=300)
+        self.yaw_scale.pack(side="left", padx=5)
+        self.lbl_yaw_val = ttk.Label(frame_yaw, text="0")
+        self.lbl_yaw_val.pack(side="left", padx=5)
+        
+        # Slider value update label
+        self.yaw_scale.bind("<Motion>", self.update_yaw_label)
+        # Send on release
+        self.yaw_scale.bind("<ButtonRelease-1>", self.send_yaw_command)
+        
+        # 3. 通用调试区域 (General Debug)
+        frame_ctrl = ttk.LabelFrame(self.root, text="General Debug Panel")
         frame_ctrl.pack(fill="x", padx=10, pady=5)
         
         # 电机编号选择
@@ -65,18 +101,15 @@ class MotorControlApp:
         mode_cb.pack(side="left", padx=5)
         mode_cb.current(0)
         
-        # 数值输入 (Entry + Slider)
+        # 数值输入
         frame_val = ttk.Frame(frame_ctrl)
         frame_val.pack(fill="x", padx=5, pady=5)
         ttk.Label(frame_val, text="Value (int16):").pack(side="left")
-        
         entry_val = ttk.Entry(frame_val, textvariable=self.value_var, width=10)
         entry_val.pack(side="left", padx=5)
-        
-        # 绑定回车发送
         entry_val.bind('<Return>', lambda e: self.send_packet())
         
-        scale_val = ttk.Scale(frame_val, from_=-10000, to=10000, variable=self.value_var, orient="horizontal", length=300)
+        scale_val = ttk.Scale(frame_val, from_=-10000, to=10000, variable=self.value_var, orient="horizontal", length=200)
         scale_val.pack(side="left", padx=5)
         
         # 发送按钮
@@ -85,7 +118,7 @@ class MotorControlApp:
         ttk.Button(frame_btns, text="SEND COMMAND", command=self.send_packet).pack(side="left", fill="x", expand=True, padx=5)
         ttk.Button(frame_btns, text="STOP ALL (Send Disable)", command=self.stop_motor).pack(side="left", fill="x", expand=True, padx=5)
         
-        # 3. 日志区域
+        # 4. 日志区域
         frame_log = ttk.LabelFrame(self.root, text="Log (TX/RX)")
         frame_log.pack(fill="both", expand=True, padx=10, pady=5)
         
@@ -95,6 +128,12 @@ class MotorControlApp:
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set)
         
+    def update_yaw_label(self, event=None):
+        # Display as -245000 to +245000, centered at 245000
+        raw_val = self.yaw_angle_var.get()
+        display_val = int(raw_val)
+        self.lbl_yaw_val.config(text=f"{display_val}")
+        
     def toggle_connection(self):
         if not self.connected:
             try:
@@ -102,11 +141,8 @@ class MotorControlApp:
                 self.connected = True
                 self.btn_connect.config(text="Disconnect")
                 self.log("Connected to " + self.port_var.get())
-                
-                # 开启接收线程
                 self.rx_thread = threading.Thread(target=self.rx_task, daemon=True)
                 self.rx_thread.start()
-                
             except serial.SerialException as e:
                 messagebox.showerror("Error", str(e))
         else:
@@ -122,59 +158,110 @@ class MotorControlApp:
                 if self.ser.in_waiting:
                     data = self.ser.read_all()
                     if data:
-                        # 在主线程更新UI
                         self.root.after(0, self.log, f"RX: {data.hex().upper()}", "green")
                 time.sleep(0.01)
             except Exception as e:
                 self.connected = False
-                self.root.after(0, self.btn_connect.config, {"text": "Connect"})
-                self.root.after(0, self.log, f"Serial Error: {e}", "red")
                 break
 
-    def send_packet(self):
+    def send_raw_packet(self, mid, mode, data_bytes):
         if not self.connected or not self.ser:
-            messagebox.showwarning("Warning", "Please connect serial port first!")
+            self.log("Error: Not Connected", "red")
             return
             
+        # Byte 0: 0x00
+        # Byte 1: ID
+        # Byte 2: Mode
+        # Remaining: data_bytes
+        header = struct.pack('BBB', 0x00, mid, mode)
+        packet = header + data_bytes
+        
+        try:
+            self.ser.write(packet)
+            self.log(f"TX: {packet.hex().upper()}", "blue")
+        except Exception as e:
+            self.log(f"Send Error: {e}", "red")
+
+    def send_packet(self):
         try:
             mid = self.motor_id_var.get()
             mode_str = self.mode_var.get()
             mode = self.modes[mode_str]
             val = int(self.value_var.get())
-            
-            # 限制范围 int16
             val = max(-32768, min(32767, val))
             
-            # 构造协议包
-            # Byte 0: 0x00 (Header)
-            # Byte 1: ID
-            # Byte 2: Mode
-            # Byte 3-4: Value (Big Endian int16)
-            packet = struct.pack('>BBBh', 0x00, mid, mode, val)
-            
-            self.ser.write(packet)
-            self.log(f"TX: {packet.hex().upper()} (ID={mid}, Mode={mode}, Val={val})", "blue")
+            # Simple packet for standard modes + mode 5
+            # Mode 5 uses same structure (val interpreted as speed)
+            packet_data = struct.pack('>h', val)
+            self.send_raw_packet(mid, mode, packet_data)
             
         except ValueError:
             messagebox.showerror("Error", "Invalid value format")
 
+    def action_prepare_launch(self):
+        # Motor 0,1: Speed -4000
+        # Motor 2,3: Speed +4000
+        speed_neg = -4000
+        speed_pos = 4000
+        
+        # Mode 3 = Speed Mode
+        data_neg = struct.pack('>h', speed_neg)
+        data_pos = struct.pack('>h', speed_pos)
+        
+        self.send_raw_packet(0, 3, data_neg)
+        time.sleep(0.01)
+        self.send_raw_packet(1, 3, data_neg)
+        time.sleep(0.01)
+        self.send_raw_packet(2, 3, data_pos)
+        time.sleep(0.01)
+        self.send_raw_packet(3, 3, data_pos)
+
+    def action_stop_friction(self):
+        # Stop motors 0,1,2,3 (Set Speed to 0)
+        speed_zero = 0
+        data_zero = struct.pack('>h', speed_zero)
+        
+        for mid in range(4):
+            self.send_raw_packet(mid, 3, data_zero) # Mode 3 (Speed) -> 0
+            time.sleep(0.01)
+
+    def action_lift_to(self, angle):
+        # Motor 6 (Load) -> Mode 6 (RunToAngle)
+        # Angle: double (Big Endian)
+        # Speed: int16 (Big Endian) -> Let's use 3000 as default speed
+        
+        speed = 5000
+        mid = 6 # Lift
+        mode = 6 # RunToAngle
+        
+        # struct.pack('>d', angle) uses Big Endian double
+        data = struct.pack('>dh', float(angle), speed)
+        
+        self.send_raw_packet(mid, mode, data)
+
+    def send_yaw_command(self, event=None):
+        # Motor 4 (Yaw) -> Mode 6 (RunToAngle)
+        angle = self.yaw_angle_var.get() + 245000
+        speed = 300 # Default speed
+        mid = 4
+        mode = 6
+        
+        data = struct.pack('>dh', float(angle), speed)
+        self.send_raw_packet(mid, mode, data)
+        self.log(f"Set Yaw: {int(self.yaw_angle_var.get())} (Raw: {int(angle)})", "purple")
+
     def stop_motor(self):
-        # 强制将当前选中的电机模式设为Disable
         current_mode = self.mode_var.get()
         self.mode_var.set("Disable (0x00)")
         self.value_var.set(0)
         self.send_packet()
-        # 恢复之前的模式选择显示的字串(可选，这里就不恢复了)
 
     def log(self, msg, color="black"):
         self.log_text.config(state="normal")
         self.log_text.insert("end", msg + "\n")
-        
-        # 简单的语法高亮
         line_count = int(self.log_text.index('end-1c').split('.')[0])
         self.log_text.tag_add("color", f"{line_count}.0", f"{line_count}.end")
         self.log_text.tag_config("color", foreground=color)
-        
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 

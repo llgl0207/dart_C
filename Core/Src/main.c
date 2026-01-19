@@ -28,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include "math.h"
 #include "stdlib.h"
+#include "string.h"
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
@@ -52,14 +53,14 @@ typedef struct{
   uint8_t data[8];
   uint32_t StdId;
 }MotorSend;//对应标志位的要发送的数据结构体
-enum PidMode{disable,currentMode,angleMode,speedMode,torqueMode};
+enum MotorMode{disable,currentMode,angleMode,speedMode,torqueMode,runToAngle,runToStallMode};
 typedef struct{
   uint16_t singleAngle;
   double rpm;
   double torque;
   int8_t tempr;
   double angle;
-  enum PidMode pidMode;
+  enum MotorMode motorMode;
   uint8_t isStalled; // 是否堵转
   uint32_t stallTimer; // 堵转计时
 }MotorState;//存储电机状态的结构体
@@ -73,6 +74,8 @@ typedef struct{
   double stallOutput; // 堵转输出阈值 (Output)
   double stallSpeedThreshold; // 堵转速度阈值 (RPM)
   uint32_t stallTimeThreshold; // 堵转时间阈值(ms)
+  double targetAngle; // For runToAngle
+  double runSpeed;    // For runToAngle
   MotorState motorState;
   Pid anglePid,speedPid,torquePid;
 }Motor;//对应每个电机的结构体
@@ -114,7 +117,7 @@ void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte)
 {//初始化电机结构体
   motor->StdId=StdId;
   motor->motor_byte=motor_byte;
-  motor->motorState.pidMode=disable;
+  motor->motorState.motorMode=disable;
   motor->motorState.singleAngle=0;
   motor->motorState.angle=0;
   motor->motorState.rpm=0;
@@ -128,6 +131,8 @@ void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte)
   motor->stallTimeThreshold = 500;
   motor->motorState.isStalled = 0;
   motor->motorState.stallTimer = 0;
+  motor->targetAngle = 0;
+  motor->runSpeed = 0;
   
   // 初始化PID指针为空，防止未配置模式时误计算
   motor->anglePid.inputAdress = NULL;
@@ -145,34 +150,38 @@ void MotorSafetyInit(Motor *motor, uint8_t maxTemp, double maxTorque, double sta
   motor->stallTimeThreshold = stallTimeThreshold;
 }
 void MotorRunToStall(Motor *motor, double speed){//以指定速度运行电机直到堵转
-  //enum PidMode lastMode = motor->motorState.pidMode;
-  motor->motorState.pidMode = speedMode;
+  //enum MotorMode lastMode = motor->motorState.motorMode;
+  motor->motorState.motorMode = speedMode;
   motor->speedPid.setpoint = speed;
   while(motor->motorState.isStalled==0){
     osDelay(1);
   }
   motor->motorState.isStalled=0;
   motor->motorState.stallTimer=0;
-  motor->motorState.pidMode = disable;
+  motor->motorState.motorMode = disable;
   motor->speedPid.setpoint = 0;
+  motor->output = 0;
 }
+void MotorSetOutput(Motor *motor, enum MotorMode mode, double value);
 void MotorRunToAngle(Motor *motor, double angle, double speed){//以指定角度运行电机
   if(motor->motorState.angle < angle){
-    motor->motorState.pidMode = speedMode;
+    motor->motorState.motorMode = speedMode;
     motor->speedPid.setpoint = fabs(speed);
     while(motor->motorState.angle < angle){
+      if(motor->motorState.isStalled) break; // 堵转检测
       osDelay(1);
     }
   }else{
-    motor->motorState.pidMode = speedMode;
+    motor->motorState.motorMode = speedMode;
     motor->speedPid.setpoint = -fabs(speed);
     while(motor->motorState.angle > angle){
+      if(motor->motorState.isStalled) break; // 堵转检测
       osDelay(1);
     }
   }
-  motor->motorState.pidMode = angleMode;
-  motor->anglePid.setpoint = angle;
   motor->speedPid.setpoint = 0;
+  motor->motorState.isStalled = 0; // Clear flag
+  MotorSetOutput(motor, angleMode, angle);
 }
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);
 void TransferToMotorSend(Motor *motor){//根据电机的StdId来决定发送到哪个MotorSend结构体中
@@ -221,12 +230,9 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
     CAN_TxHeaderTypeDef TxHeader;
     uint32_t ReID=0x205;
     uint8_t ReData[8];
-    int ARR =999;
+    int Arr =999;
     int CanSendCounter=0;
     
-    // 双环控制的外部速度环PID实体
-    //Pid outerSpeedPid;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -234,7 +240,7 @@ void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 void PidCalculate(Pid *pid);
-void MotorSetOutput(Motor *motor, enum PidMode mode, double value);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -445,26 +451,57 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
 {
     // 解析自定义数据包
-    // Byte 0: 0x00 (保留/帧头)
+    // Byte 0: 0x00 (Header)
     // Byte 1: Motor ID (0-6)
-    // Byte 2: Mode (0:Disable, 1:Current, 2:Angle, 3:Speed, 4:Torque)
-    // Byte 3-4: Value (int16, Big Endian)
-    if(CDC_Ctrl_state != 1) return; // 未连接时不处理
+    // Byte 2: Mode 
+    
+    //if(CDC_Ctrl_state != 1) return; // 未连接时不处理
     if (Len >= 5 && Buf[0] == 0x00) {
         uint8_t motor_id = Buf[1];
         uint8_t mode_val = Buf[2];
         
         if (motor_id < MOTOR_NUM) {
-            // 组合 16 位补码数值 (模拟大端序: High << 8 | Low)
-            int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
-            double val_double = (double)val_int16;
-
-            // 检查模式是否有效 (0 ~ 4)
-            if (mode_val <= 4) {
-                 // enum PidMode 定义: disable=0, currentMode=1, angleMode=2, speedMode=3, torqueMode=4
-                 // 若为 disable 模式，val_double 不影响结果，内部会设为 0
-                 MotorSetOutput(motor_array[motor_id], (enum PidMode)mode_val, val_double);
-            }
+             if (mode_val <= 4) {
+                 // 立即设置 (非阻塞)
+                 // Byte 3-4: Value (int16, Big Endian)
+                 int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
+                 double val_double = (double)val_int16;
+                 
+                 MotorSetOutput(motor_array[motor_id], (enum MotorMode)mode_val, val_double);
+             
+             } else if (mode_val == 0x05) {
+                 // Mode 5: RunToStall (Non-blocking)
+                 // Byte 3-4: Speed (int16, Big Endian)
+                 int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
+                 
+                 Motor *m = motor_array[motor_id];
+                 m->runSpeed = (double)val_int16;
+                 MotorSetOutput(m, runToStallMode, 0);
+                 
+             } else if (mode_val == 0x06 && Len >= 13) {
+                 // Mode 6: RunToAngle (Non-blocking)
+                 // Byte 3-10: Angle (double, Big Endian from Python)
+                 // Byte 11-12: Speed (int16, Big Endian)
+                 
+                 uint8_t temp[8];
+                 // Reverse bytes for correct double representation if Python sends Big Endian
+                 // STM32 is Little Endian
+                 for(int i=0; i<8; i++) {
+                     temp[i] = Buf[10 - i];
+                 }
+                 double angle_val;
+                 memcpy(&angle_val, temp, 8);
+                 
+                 int16_t speed_int16 = (int16_t)((Buf[11] << 8) | Buf[12]);
+                 
+                 Motor *m = motor_array[motor_id];
+                 m->targetAngle = angle_val;
+                 m->runSpeed = (double)speed_int16;
+                 // Manually setup for runToAngle
+                 m->speedPid.inputAdress = &m->motorState.rpm;
+                 m->speedPid.outputAdress = &m->output;
+                 m->motorState.motorMode = runToAngle; 
+             }
         }
     }
 
@@ -493,8 +530,8 @@ void PidCalculate(Pid *pid){
   if (pid->outputAdress != NULL) *pid->outputAdress = pid->output;
 }
 
-void MotorSetOutput(Motor *motor, enum PidMode mode, double value){
-  motor->motorState.pidMode = mode;
+void MotorSetOutput(Motor *motor, enum MotorMode mode, double value){
+  motor->motorState.motorMode = mode;
   switch (mode)
   {
   case disable:
@@ -517,6 +554,12 @@ void MotorSetOutput(Motor *motor, enum PidMode mode, double value){
     motor->torquePid.setpoint = value;
     motor->torquePid.inputAdress = &motor->motorState.torque;
     motor->torquePid.outputAdress = &motor->output;
+    break;
+  case runToStallMode: // Non-blocking run to stall
+    // Setup speed PID but user must ensure target is set via structure or external logic
+     motor->speedPid.inputAdress = &motor->motorState.rpm;
+     motor->speedPid.outputAdress = &motor->output;
+     motor->motorState.isStalled = 0; // Clear stall flag
     break;
   default:
     break;
@@ -543,6 +586,40 @@ void MotorUpdate(void const * argument)
       Motor *m = motor_array[i];
       // PID calculation moved to StartPidTask
       
+      // Handle runToAngle status
+      if (m->motorState.motorMode == runToAngle) {
+          // 如果堵转，切换到 angleMode 并在当前位置保持
+          if (m->motorState.isStalled) {
+              MotorSetOutput(m, angleMode, m->motorState.angle);
+              m->motorState.isStalled = 0; // Clear stalled flag to allow new moves
+          } else {
+              // 简单的 bang-bang 速度控制向目标角度移动
+              // 或者更好的 P 控制以避免震荡，这里按用户原逻辑使用固定速度
+              double diff = m->motorState.angle - m->targetAngle;
+              
+              if (fabs(diff) < 100) { // 阈值判定到达
+                  MotorSetOutput(m, angleMode, m->targetAngle);
+              } else {
+                 // 继续运行
+                 if (m->motorState.angle < m->targetAngle) {
+                     m->speedPid.setpoint = fabs(m->runSpeed);
+                 } else {
+                     m->speedPid.setpoint = -fabs(m->runSpeed);
+                 }
+                 // 在 runToAngle 模式下，StartPidTask 会计算 speedPid
+              }
+          }
+      } else if (m->motorState.motorMode == runToStallMode) {
+          if (m->motorState.isStalled) {
+              m->motorState.motorMode = disable;
+              m->output = 0;
+              m->speedPid.setpoint = 0;
+              m->motorState.isStalled = 0;
+          } else {
+              m->speedPid.setpoint = m->runSpeed;
+          }
+      }
+
       // Safety Checks
       // 1. 堵转检测
       // 使用最终输出电流值(m->output)和转速(m->motorState.rpm)进行判断
@@ -655,7 +732,7 @@ void MotorUpdate(void const * argument)
 void StartTask2(void const * argument)
 {
   ///////////////////////////////////////////////////
-  //    lift全程angle:9610000 向上为正              //
+  //    lift全程angle:9000000 向上为正              //
   //    GM6020全程angle:490000 顺时针为正           //
   ///////////////////////////////////////////////////
   /* USER CODE BEGIN StartDefaultTask */
@@ -670,7 +747,7 @@ void StartTask2(void const * argument)
   MotorInit(&fric4, 0x200, 6);
   MotorSafetyInit(&fric4, 35, 5000, 500, 50, 500);
   MotorInit(&lift, 0x1FF, 4);
-  MotorSafetyInit(&lift, 35, 5000, 500, 50, 500);
+  MotorSafetyInit(&lift, 35, 5000, 2000, 50, 500);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
   MotorSafetyInit(&load, 35, 5000, 500, 50, 500);
@@ -725,7 +802,10 @@ void StartTask2(void const * argument)
   MotorRunToAngle(&GM6020,245000,300);
   //MotorRunToStall(&lift,6000);
   MotorRunToStall(&lift,-6000);
+  osDelay(100);
   lift.motorState.angle=0;
+  lift.motorState.isStalled=0;
+  //MotorRunToAngle(&lift,0,300);
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET); // 指示初始化完成
   osDelay(1000);
   MotorSetOutput(&fric1, speedMode, -4000);
@@ -743,6 +823,7 @@ void StartTask2(void const * argument)
   /* Infinite loop */
   for(;;)
   {//主程序在此处编写
+    
     // 可以在这里改变 outerSpeedPid.setpoint 来动态调整速度
     //alarm_level = 2; // 测试报警
     osDelay(1);
@@ -760,11 +841,13 @@ void StartPidTask(void const * argument)
 
     for(int i=0; i<MOTOR_NUM; i++){
        Motor *m = motor_array[i];
-       switch(m->motorState.pidMode){
+       switch(m->motorState.motorMode){
          case angleMode:
            PidCalculate(&m->anglePid);
            break;
          case speedMode:
+         case runToAngle: // runToAngle 本质上是速度环控制
+         case runToStallMode: // runToStall 本质也是速度环
            PidCalculate(&m->speedPid);
            break;
          case torqueMode:
