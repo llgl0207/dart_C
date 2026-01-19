@@ -28,12 +28,13 @@
 /* USER CODE BEGIN Includes */
 #include "math.h"
 #include "stdlib.h"
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef struct{
-  double Kp;
+  double Kp;  
   double Ki;
   double Kd;
   double error;
@@ -69,7 +70,8 @@ typedef struct{
   uint8_t enabled; //使能
   int8_t maxTemp; // 温度阈值
   double maxTorque; // 转矩阈值
-  double stallTorque; // 堵转转矩阈值
+  double stallOutput; // 堵转输出阈值 (Output)
+  double stallSpeedThreshold; // 堵转速度阈值 (RPM)
   uint32_t stallTimeThreshold; // 堵转时间阈值(ms)
   MotorState motorState;
   Pid anglePid,speedPid,torquePid;
@@ -107,7 +109,9 @@ void PidInit(Pid *pid,double Kp,double Ki,double Kd,double maxOutput,double dead
   pid->deadband=deadband;
   pid->intergralLimit=intergralLimit;
 }
-void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,double maxTorque, double stallTorque, uint32_t stallTimeThreshold){//初始化电机结构体
+void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte)
+  //,uint8_t maxTemp,double maxTorque, double stallOutput, double stallSpeedThreshold, uint32_t stallTimeThreshold)
+{//初始化电机结构体
   motor->StdId=StdId;
   motor->motor_byte=motor_byte;
   motor->motorState.pidMode=disable;
@@ -117,10 +121,11 @@ void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,do
   motor->motorState.torque=0;
   motor->motorState.tempr=0;
   motor->enabled = 1;
-  motor->maxTemp = maxTemp;
-  motor->maxTorque = maxTorque;
-  motor->stallTorque = stallTorque;
-  motor->stallTimeThreshold = stallTimeThreshold;
+  motor->maxTemp = 35;
+  motor->maxTorque = 5000;
+  motor->stallOutput = 1000;
+  motor->stallSpeedThreshold = 50;
+  motor->stallTimeThreshold = 500;
   motor->motorState.isStalled = 0;
   motor->motorState.stallTimer = 0;
   
@@ -131,6 +136,42 @@ void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte,uint8_t maxTemp,do
   motor->speedPid.outputAdress = NULL;
   motor->torquePid.inputAdress = NULL;
   motor->torquePid.outputAdress = NULL;
+}
+void MotorSafetyInit(Motor *motor, uint8_t maxTemp, double maxTorque, double stallOutput, double stallSpeedThreshold, uint32_t stallTimeThreshold){
+  motor->maxTemp = maxTemp;
+  motor->maxTorque = maxTorque;
+  motor->stallOutput = stallOutput;
+  motor->stallSpeedThreshold = stallSpeedThreshold;
+  motor->stallTimeThreshold = stallTimeThreshold;
+}
+void MotorRunToStall(Motor *motor, double speed){//以指定速度运行电机直到堵转
+  //enum PidMode lastMode = motor->motorState.pidMode;
+  motor->motorState.pidMode = speedMode;
+  motor->speedPid.setpoint = speed;
+  while(motor->motorState.isStalled==0){
+    osDelay(1);
+  }
+  motor->motorState.isStalled=0;
+  motor->motorState.stallTimer=0;
+  motor->motorState.pidMode = disable;
+  motor->speedPid.setpoint = 0;
+}
+void MotorRunToAngle(Motor *motor, double angle, double speed){//以指定角度运行电机
+  if(motor->motorState.angle < angle){
+    motor->motorState.pidMode = speedMode;
+    motor->speedPid.setpoint = fabs(speed);
+    while(motor->motorState.angle < angle){
+      osDelay(1);
+    }
+  }else{
+    motor->motorState.pidMode = speedMode;
+    motor->speedPid.setpoint = -fabs(speed);
+    while(motor->motorState.angle > angle){
+      osDelay(1);
+    }
+  }
+  motor->motorState.pidMode = disable;
+  motor->speedPid.setpoint = 0;
 }
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);
 void TransferToMotorSend(Motor *motor){//根据电机的StdId来决定发送到哪个MotorSend结构体中
@@ -351,6 +392,8 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+
+
 void CAN_SendMessage(uint8_t *data, uint32_t StdId) {
   //CAN_TxHeaderTypeDef TxHeader;
   uint32_t TxMailbox;
@@ -395,6 +438,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       motor_array[i]->enabled=0;
     }
   }
+}
+
+void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
+{
+    // 将接收到的数据回显（Echo）
+    // 注意：CDC_Transmit_FS 如果正在忙碌可能会失败，实际应用可以使用缓冲区或重试机制
+    CDC_Transmit_FS(Buf, Len);
 }
 
 void PidCalculate(Pid *pid){
@@ -451,6 +501,8 @@ void MotorUpdate(void const * argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   static int buzzer_tick = 0;
+  static int buzzer_oneshot = 0; // 短响计时器
+  
   alarm_level = 0;
   osDelay(1000);
   // 确保开启 TIM4 CH3 的 PWM 输出
@@ -467,7 +519,9 @@ void MotorUpdate(void const * argument)
       
       // Safety Checks
       // 1. 堵转检测
-      if (abs((int)m->motorState.torque) > m->stallTorque) {
+      // 使用最终输出电流值(m->output)和转速(m->motorState.rpm)进行判断
+      uint8_t prev_stalled = m->motorState.isStalled;
+      if (fabs(m->output) > m->stallOutput && fabs(m->motorState.rpm) < m->stallSpeedThreshold) {
           m->motorState.stallTimer++;
       } else {
           m->motorState.stallTimer = 0;
@@ -476,6 +530,24 @@ void MotorUpdate(void const * argument)
       
       if (m->motorState.stallTimer > m->stallTimeThreshold) {
           m->motorState.isStalled = 1;
+      }
+
+      // 检测到堵转状态上升沿 (0 -> 1)，触发一次短响
+      if (prev_stalled == 0 && m->motorState.isStalled == 1) {
+          buzzer_oneshot = 200; // 触发200ms短响
+          
+          if(i < 7) {
+            // 现场计算频率 (Base: C3=130.81Hz)
+            // C Major semitones: 0(C), 2(D), 4(E), 5(F), 7(G), 9(A), 11(B)
+            int semitones_map[] = {0, 2, 4, 5, 7, 9, 11};
+            float freq = 261.63f * pow(2.0f, semitones_map[i] / 12.0f);
+            
+            // ARR = (TimerClock / Frequency) - 1. TimerClock = 1MHz
+            uint32_t reload = (uint32_t)(1000000.0f / freq) - 1;
+            __HAL_TIM_SET_AUTORELOAD(&htim4, reload);
+            // 同时更新占空比为50% (CCR = ARR/2)
+             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, reload / 2);
+          }
       }
 
       // 2. 阈值保护 (温度 > 阈值 OR (转矩 > 阈值(瞬间)))
@@ -514,8 +586,17 @@ void MotorUpdate(void const * argument)
     }
     
     if (buzzer_tick >= cycle_period) buzzer_tick = 0; 
-
-    if (alarm_level == 0) {
+    
+    if (buzzer_oneshot > 0) {
+        // 短响期间保持当前频率输出
+        buzzer_oneshot--;
+        if (buzzer_oneshot == 0) {
+            // 结束短响，恢复默认 1KHz (ARR = 999)
+            __HAL_TIM_SET_AUTORELOAD(&htim4, 999);
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 暂歇
+        }
+    }
+    else if (alarm_level == 0) {
         __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 正常情况静音
         buzzer_tick = 0; // 复位保持同步
     } else {
@@ -547,35 +628,56 @@ void MotorUpdate(void const * argument)
 
 void StartTask2(void const * argument)
 {
+  ///////////////////////////////////////////////////
+  //    lift全程angle:9610000 向上为正              //
+  //    GM6020全程angle:490000 顺时针为正           //
+  ///////////////////////////////////////////////////
   /* USER CODE BEGIN StartDefaultTask */
-  // 1. 初始化电机基本结构 (StdId, MotorByte, MaxTemp, MaxTorque, StallTorque, StallTime)
-  MotorInit(&fric1, 0x200, 0, 50, 5000.0, 8000.0, 1000);
-  MotorInit(&fric2, 0x200, 2, 50, 5000.0, 8000.0, 1000);
-  MotorInit(&fric3, 0x200, 4, 50, 5000.0, 8000.0, 1000);
-  MotorInit(&fric4, 0x200, 6, 50, 5000.0, 8000.0, 1000);
-  MotorInit(&lift, 0x1FF, 4, 50, 5000.0, 8000.0, 1000);
-  lift.enabled=0; // 升降电机初始禁用
-  MotorInit(&load, 0x1FF, 2, 50, 5000.0, 8000.0, 1000);
+  // 1. 初始化电机基本结构 MotorInit(*motor, StdId, MotorByte);
+  //MotorSafetyInit(*motor, maxTemp, maxTorque, stallOutput, stallSpeedThreshold, stallTimeThreshold);  
+  MotorInit(&fric1, 0x200, 0);
+  MotorSafetyInit(&fric1, 35, 5000, 500, 50, 500);
+  MotorInit(&fric2, 0x200, 2);
+  MotorSafetyInit(&fric2, 35, 5000, 500, 50, 500);
+  MotorInit(&fric3, 0x200, 4);
+  MotorSafetyInit(&fric3, 35, 5000, 500, 50, 500);
+  MotorInit(&fric4, 0x200, 6);
+  MotorSafetyInit(&fric4, 35, 5000, 500, 50, 500);
+  MotorInit(&lift, 0x1FF, 4);
+  MotorSafetyInit(&lift, 35, 5000, 500, 50, 1000);
+  //lift.enabled=0; // 升降电机初始禁用
+  MotorInit(&load, 0x1FF, 2);
+  MotorSafetyInit(&load, 35, 5000, 500, 50, 500);
   load.enabled=0; // 装弹电机初始禁用
-  MotorInit(&GM6020, 0x1FE, 0, 50, 3000.0, 2000.0, 1000);
+  MotorInit(&GM6020, 0x1FE, 0);
+  MotorSafetyInit(&GM6020, 35, 5000, 1000, 50, 500);
 
   // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp,Ki,Kd,MaxOut,Deadband,I_Limit
   PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
+  PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric1.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&fric2.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric2.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&fric3.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric3.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&fric4.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&fric4.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&lift.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&lift.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&load.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
+  PidInit(&load.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   
-  // 3. 设置 GM6020 为角度模式，目标角度初始为 0 (稍后由外环控制)
-  MotorSetOutput(&GM6020, angleMode, 0);
+  // 3. 设置初始输出为 0
+  MotorSetOutput(&GM6020, speedMode, 0);
   MotorSetOutput(&fric1, angleMode, 0);
-  MotorSetOutput(&fric2, angleMode, 0);
+  MotorSetOutput(&fric2, speedMode, 0);
   MotorSetOutput(&fric3, angleMode, 0);
   MotorSetOutput(&fric4, angleMode, 0);
-  MotorSetOutput(&lift, angleMode, 0);
+  MotorSetOutput(&lift, speedMode, 0);
   MotorSetOutput(&load, angleMode, 0);
+
+
 
   // 4. 初始化外部速度环 PID (外环)
   // 参数: Kp=1.0, Ki=0.0, Kd=0.0 (需根据实际调优), MaxOut=8191(角度最大值), Deadband=0, I_Limit=0
@@ -589,6 +691,28 @@ void StartTask2(void const * argument)
   // 6. 设定外环目标值
   //outerSpeedPid.setpoint = 100.0; // 例如：目标 100 RPM
 
+
+  /////////////////////////以下为主程序////////////////////////////
+  //上电初始化，GM6020和lift走到负方向限位
+  MotorRunToStall(&GM6020,-300);
+  MotorRunToStall(&lift,4000);
+  MotorRunToStall(&lift,-4000);
+  GM6020.motorState.angle=0;
+  lift.motorState.angle=0;
+  MotorRunToAngle(&GM6020,245000,300);
+  HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET); // 指示初始化完成
+  osDelay(1000);
+  MotorSetOutput(&fric1, speedMode, 2000);
+  MotorSetOutput(&fric2, speedMode, 2000);
+  MotorSetOutput(&fric3, speedMode, 2000);
+  MotorSetOutput(&fric4, speedMode, 2000);
+  osDelay(3000);
+  MotorSetOutput(&fric1, speedMode, 0);
+  MotorSetOutput(&fric2, speedMode, 0);
+  MotorSetOutput(&fric3, speedMode, 0);
+  MotorSetOutput(&fric4, speedMode, 0);
+  HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED_G_GPIO_Port, LED_G_Pin, GPIO_PIN_SET); // 指示准备完成
   /* Infinite loop */
   for(;;)
   {//主程序在此处编写
