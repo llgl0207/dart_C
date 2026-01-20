@@ -6,25 +6,38 @@ import threading
 import time
 
 # 配置
-DEFAULT_PORT = 'COM27'
+# DEFAULT_PORT = 'COM27'
+DEFAULT_PORT = 'COM27' # User might need to change this, but safe default
 BAUDRATE = 115200
+MOTOR_NUM = 7
 
 class MotorControlApp:
     def __init__(self, root):
         self.root = root
         self.root.title("RoboMaster Dart Motor Control")
-        self.root.geometry("700x650")
+        # 增加宽度以容纳左侧边栏
+        self.root.geometry("1100x700")
         
         self.ser = None
         self.connected = False
+        self.lock = threading.Lock()
         
         # 变量
         self.port_var = tk.StringVar(value=DEFAULT_PORT)
         self.motor_id_var = tk.IntVar(value=0)
         self.mode_var = tk.StringVar(value="Disable")
         self.value_var = tk.IntVar(value=0)
-        self.yaw_angle_var = tk.DoubleVar(value=245000)
+        self.friction_speed_var = tk.IntVar(value=4000) # Added: Friction wheel speed (default 4000)
+        self.yaw_angle_var = tk.DoubleVar(value=0) # Slide range -245000 to 245000
         self.log_text = None
+        
+        # 电机状态数据存储
+        # motor_data[id] = { 'angle': int, 'rpm': int, 'torque': int, 'temp': int, 'enabled': bool, 'stalled': bool, 'mode': int, 'total_angle': int }
+        self.motor_data = [
+            {'angle': 0, 'rpm': 0, 'torque': 0, 'temp': 0, 'enabled': False, 'stalled': False, 'mode': 0, 'total_angle': 0}
+            for _ in range(MOTOR_NUM)
+        ]
+        self.motor_labels = [] # 存储UI标签引用以便更新
         
         # 模式映射
         self.modes = {
@@ -34,14 +47,152 @@ class MotorControlApp:
             "Speed (0x03)": 3,
             "Torque (0x04)": 4,
             "RunToStall (0x05)": 5,
-            # Mode 6 is hidden from dropdown as it requires special payload
+            "RunToAngle (0x06)": 6
         }
         
         self.create_ui()
         
+        # 启动UI定时刷新任务
+        self.root.after(100, self.update_monitor_ui)
+        
     def create_ui(self):
+        # 主布局：左右分栏
+        paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+        
+        # 左侧：电机状态监控栏
+        frame_monitor = ttk.LabelFrame(paned, text="Motor Status Monitor", width=420)
+        paned.add(frame_monitor, weight=1)
+        
+        # 创建左侧监控表格
+        self.create_monitor_panel(frame_monitor)
+        
+        # 右侧：原有控制面板
+        frame_control = ttk.Frame(paned)
+        paned.add(frame_control, weight=2)
+        
+        self.create_control_panel(frame_control)
+
+    def create_monitor_panel(self, parent):
+        # 使用 Canvas + Scrollbar 以防展示不全
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # 标题行
+        headers = ["ID", "Stat", "Mode", "Angle", "RPM", "Torq", "Tmp", "TotAng"]
+        for col, text in enumerate(headers):
+            lbl = ttk.Label(scrollable_frame, text=text, font=('Arial', 9, 'bold'))
+            lbl.grid(row=0, column=col, padx=4, pady=5, sticky="w")
+            
+        # 电机数据行
+        motor_names = ["Fric1", "Fric2", "Fric3", "Fric4", "GM6020", "Load", "Lift"]
+        
+        for i in range(MOTOR_NUM):
+            # ID / Name
+            ttk.Label(scrollable_frame, text=f"{i} ({motor_names[i]})", font=('Arial', 9)).grid(row=i+1, column=0, padx=2, pady=2, sticky="w")
+            
+            # Status (Enabled/Stalled)
+            lbl_stat = ttk.Label(scrollable_frame, text="DIS", font=('Arial', 9), foreground="gray", width=5)
+            lbl_stat.grid(row=i+1, column=1, padx=2, pady=2)
+            
+            # Mode
+            lbl_mode = ttk.Label(scrollable_frame, text="0", font=('Arial', 9), width=3)
+            lbl_mode.grid(row=i+1, column=2, padx=2, pady=2)
+            
+            # Angle
+            lbl_angle = ttk.Label(scrollable_frame, text="0", font=('Arial', 9), width=6)
+            lbl_angle.grid(row=i+1, column=3, padx=2, pady=2)
+            
+            # RPM
+            lbl_rpm = ttk.Label(scrollable_frame, text="0", font=('Arial', 9), width=5)
+            lbl_rpm.grid(row=i+1, column=4, padx=2, pady=2)
+            
+            # Torque
+            lbl_trq = ttk.Label(scrollable_frame, text="0", font=('Arial', 9), width=5)
+            lbl_trq.grid(row=i+1, column=5, padx=2, pady=2)
+            
+            # Temp
+            lbl_tmp = ttk.Label(scrollable_frame, text="0°C", font=('Arial', 9), width=4)
+            lbl_tmp.grid(row=i+1, column=6, padx=2, pady=2)
+
+            # Total Angle
+            lbl_total_angle = ttk.Label(scrollable_frame, text="0", font=('Arial', 9), width=8)
+            lbl_total_angle.grid(row=i+1, column=7, padx=2, pady=2)
+            
+            self.motor_labels.append({
+                'stat': lbl_stat, 'mode': lbl_mode, 'angle': lbl_angle, 
+                'rpm': lbl_rpm, 'trq': lbl_trq, 'tmp': lbl_tmp, 'total_angle': lbl_total_angle
+            })
+
+    def create_individual_controls(self, parent):
+        frame_indiv = ttk.LabelFrame(parent, text="Individual Motor Control (Speed Mode 0x03)")
+        frame_indiv.pack(fill="x", padx=10, pady=5)
+        
+        # Grid headers
+        ttk.Label(frame_indiv, text="ID").grid(row=0, column=0, padx=2)
+        ttk.Label(frame_indiv, text="Set Speed").grid(row=0, column=1, padx=2)
+        ttk.Label(frame_indiv, text="Control").grid(row=0, column=2, padx=2, columnspan=3)
+        
+        self.indiv_speed_vars = []
+        # Defaults: 0-3=4000, 4=300, 6=3000. (5 default to 3000 like 6 or safe value)
+        defaults = {0:4000, 1:4000, 2:4000, 3:4000, 4:300, 5:1000, 6:3000}
+        
+        for i in range(MOTOR_NUM):
+            # ID
+            ttk.Label(frame_indiv, text=f"M{i}").grid(row=i+1, column=0, padx=2, pady=2)
+            
+            # Speed Input
+            var = tk.IntVar(value=defaults.get(i, 1000))
+            self.indiv_speed_vars.append(var)
+            ttk.Entry(frame_indiv, textvariable=var, width=8).grid(row=i+1, column=1, padx=2)
+            
+            # Buttons
+            # REV (-speed)
+            btn_rev = ttk.Button(frame_indiv, text="REV", width=5, 
+                command=lambda idx=i: self.set_motor_speed(idx, -1))
+            btn_rev.grid(row=i+1, column=2, padx=1)
+            
+            # STOP (0)
+            btn_stop = ttk.Button(frame_indiv, text="STOP", width=5, 
+                command=lambda idx=i: self.set_motor_speed(idx, 0))
+            btn_stop.grid(row=i+1, column=3, padx=1)
+            
+            # FWD (+speed)
+            btn_fwd = ttk.Button(frame_indiv, text="FWD", width=5, 
+                command=lambda idx=i: self.set_motor_speed(idx, 1))
+            btn_fwd.grid(row=i+1, column=4, padx=1)
+
+    def set_motor_speed(self, motor_idx, direction):
+        # direction: -1 (Rev), 0 (Stop), 1 (Fwd)
+        try:
+            speed_mag = abs(self.indiv_speed_vars[motor_idx].get())
+            final_speed = speed_mag * direction
+            
+            # Construct packet: ID, Mode=3 (Speed), Value=final_speed
+            header = struct.pack('BBB', 0x00, motor_idx, 3) 
+            data = struct.pack('>h', final_speed)
+            
+            if self.ser and self.connected:
+                self.ser.write(header + data)
+                self.log(f"M{motor_idx} Speed Set: {final_speed} (Mode 3)")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def create_control_panel(self, parent):
         # 1. 串口设置区域
-        frame_conn = ttk.LabelFrame(self.root, text="Connection")
+        frame_conn = ttk.LabelFrame(parent, text="Connection")
         frame_conn.pack(fill="x", padx=10, pady=5)
         
         ttk.Label(frame_conn, text="Port:").pack(side="left", padx=5)
@@ -50,13 +201,18 @@ class MotorControlApp:
         self.btn_connect.pack(side="left", padx=5)
         
         # 2. 快捷控制区域 (New Features)
-        frame_actions = ttk.LabelFrame(self.root, text="Quick Actions")
+        frame_actions = ttk.LabelFrame(parent, text="Quick Actions")
         frame_actions.pack(fill="x", padx=10, pady=5)
         
         # Dart Launch Controls
         frame_launch = ttk.Frame(frame_actions)
         frame_launch.pack(fill="x", padx=5, pady=5)
         ttk.Label(frame_launch, text="Dart Launch:").pack(side="left")
+        
+        # Friction Speed Input
+        ttk.Label(frame_launch, text="Speed:").pack(side="left", padx=2)
+        ttk.Entry(frame_launch, textvariable=self.friction_speed_var, width=6).pack(side="left", padx=2)
+        
         ttk.Button(frame_launch, text="Prepare Launch (Friction ON)", command=self.action_prepare_launch).pack(side="left", padx=5)
         ttk.Button(frame_launch, text="Stop Friction (OFF)", command=self.action_stop_friction).pack(side="left", padx=5)
         
@@ -66,7 +222,7 @@ class MotorControlApp:
         ttk.Label(frame_load, text="Reload (Lift ID 6):").pack(side="left")
         ttk.Button(frame_load, text="Reload 1 (Angle 4805000)", command=lambda: self.action_lift_to(4805000)).pack(side="left", padx=5)
         ttk.Button(frame_load, text="Reload 2 (Angle 8000000)", command=lambda: self.action_lift_to(8000000)).pack(side="left", padx=5)
-        ttk.Button(frame_load, text="Reset Load (Angle 0)", command=lambda: self.action_lift_to(0)).pack(side="left", padx=5)
+        ttk.Button(frame_load, text="Reset Load (Stall -6000)", command=self.action_reset_load).pack(side="left", padx=5)
         
         # Yaw Control (ID 4)
         frame_yaw = ttk.Frame(frame_actions)
@@ -82,8 +238,11 @@ class MotorControlApp:
         # Send on release
         self.yaw_scale.bind("<ButtonRelease-1>", self.send_yaw_command)
         
-        # 3. 通用调试区域 (General Debug)
-        frame_ctrl = ttk.LabelFrame(self.root, text="General Debug Panel")
+        # 3. 独立电机控制区域 (Individual Control)
+        self.create_individual_controls(parent)
+        
+        # 4. 通用调试区域 (General Debug)
+        frame_ctrl = ttk.LabelFrame(parent, text="General Debug Panel")
         frame_ctrl.pack(fill="x", padx=10, pady=5)
         
         # 电机编号选择
@@ -119,7 +278,7 @@ class MotorControlApp:
         ttk.Button(frame_btns, text="STOP ALL (Send Disable)", command=self.stop_motor).pack(side="left", fill="x", expand=True, padx=5)
         
         # 4. 日志区域
-        frame_log = ttk.LabelFrame(self.root, text="Log (TX/RX)")
+        frame_log = ttk.LabelFrame(parent, text="Log (TX/Raw RX)")
         frame_log.pack(fill="both", expand=True, padx=10, pady=5)
         
         self.log_text = tk.Text(frame_log, height=10, state="disabled")
@@ -153,20 +312,134 @@ class MotorControlApp:
             self.log("Disconnected")
 
     def rx_task(self):
+        # 接收缓冲区
+        rx_buffer = b''
+        PACKET_LEN = 14 # Updated to 14 bytes to include total_angle
+        
         while self.connected:
             try:
-                if self.ser.in_waiting:
-                    data = self.ser.read_all()
-                    if data:
-                        self.root.after(0, self.log, f"RX: {data.hex().upper()}", "green")
-                time.sleep(0.01)
+                if self.ser and self.ser.in_waiting:
+                    data = self.ser.read(self.ser.in_waiting)
+                    rx_buffer += data
+                    
+                    # 尝试解析完整数据包
+                    while len(rx_buffer) >= PACKET_LEN:
+                        # 寻找帧头 0x81
+                        if rx_buffer[0] != 0x81:
+                            # 优化: 使用 index 快速跳过无效数据，而不是切片遍历
+                            try:
+                                idx = rx_buffer.index(0x81)
+                                rx_buffer = rx_buffer[idx:]
+                            except ValueError:
+                                # 缓冲区内没有帧头，清空（或保留最后几个字节以防分包，这里简化处理）
+                                rx_buffer = b''
+                                break
+                            continue
+                        
+                        # 再次检查长度（可能跳过数据后不足一包）
+                        if len(rx_buffer) < PACKET_LEN:
+                            break
+
+                        # 取出一个包
+                        packet = rx_buffer[:PACKET_LEN]
+                        rx_buffer = rx_buffer[PACKET_LEN:]
+                        
+                        self.parse_feedback(packet)
+                else:
+                    time.sleep(0.002) # 稍微增加休眠以降低CPU占用
             except Exception as e:
+                print(f"RX Error: {e}")
                 self.connected = False
                 break
+                
+    def parse_feedback(self, packet):
+        try:
+            # Unpack: 0x81 (ignored), ID, AngH, AngL, RpmH, RpmL, TrqH, TrqL, Tmp, Flags, TotAng(4 bytes)
+            
+            motor_id = packet[1]
+            if motor_id >= MOTOR_NUM: return
+            
+            # Big Endian integers
+            angle = (packet[2] << 8) | packet[3]
+            rpm = (packet[4] << 8) | packet[5]
+            torque = (packet[6] << 8) | packet[7]
+            
+            # Signed conversions (int16)
+            if rpm > 32767: rpm -= 65536
+            if torque > 32767: torque -= 65536
+            
+            temp = packet[8] # int8
+            if temp > 127: temp -= 256
+            
+            flags = packet[9]
+            enabled = (flags >> 7) & 0x01
+            stalled = (flags >> 6) & 0x01
+            mode = flags & 0x3F # bits 0-5
+            
+            # Total Angle (int32, big endian)
+            total_angle = (packet[10] << 24) | (packet[11] << 16) | (packet[12] << 8) | packet[13]
+            # Handle int32 sign
+            if total_angle >= 0x80000000:
+                total_angle -= 0x100000000
+
+            # 更新数据模型 - 使用 update 避免频繁创建新字典对象
+            with self.lock:
+                self.motor_data[motor_id].update({
+                    'angle': angle,
+                    'rpm': rpm,
+                    'torque': torque,
+                    'temp': temp,
+                    'enabled': enabled,
+                    'stalled': stalled,
+                    'mode': mode,
+                    'total_angle': total_angle
+                })
+                
+        except Exception as e:
+            print(f"Parse Error: {e}")
+
+    def update_monitor_ui(self):
+        # 在主线程更新UI
+        with self.lock:
+            for i in range(MOTOR_NUM):
+                data = self.motor_data[i]
+                
+                if i < len(self.motor_labels):
+                    labels = self.motor_labels[i]
+                    
+                    # 状态颜色
+                    if data['stalled']:
+                        status_text = "STALL"
+                        status_color = "red"
+                    elif data['enabled']:
+                        status_text = "ENA"
+                        status_color = "green"
+                    else:
+                        status_text = "DIS"
+                        status_color = "gray"
+                        
+                    labels['stat'].config(text=status_text, foreground=status_color)
+                    labels['mode'].config(text=str(data['mode']))
+                    labels['angle'].config(text=str(data['angle']))
+                    labels['rpm'].config(text=str(data['rpm']))
+                    labels['trq'].config(text=str(data['torque']))
+                    
+                    # 温度报警色
+                    temp_color = "black"
+                    if data['temp'] > 50: temp_color = "orange"
+                    if data['temp'] > 70: temp_color = "red"
+                    labels['tmp'].config(text=f"{data['temp']}°C", foreground=temp_color)
+                    
+                    # Update Total Angle Label
+                    if 'total_angle' in labels:
+                        labels['total_angle'].config(text=str(data.get('total_angle', 0)))
+
+        # 循环调用自己
+        self.root.after(100, self.update_monitor_ui)
 
     def send_raw_packet(self, mid, mode, data_bytes):
         if not self.connected or not self.ser:
-            self.log("Error: Not Connected", "red")
+            # self.log("Error: Not Connected", "red") 
             return
             
         # Byte 0: 0x00
@@ -178,7 +451,8 @@ class MotorControlApp:
         
         try:
             self.ser.write(packet)
-            self.log(f"TX: {packet.hex().upper()}", "blue")
+            # TX Log (Optional: reduce log spam)
+            # self.log(f"TX: {packet.hex().upper()}", "blue")
         except Exception as e:
             self.log(f"Send Error: {e}", "red")
 
@@ -194,15 +468,22 @@ class MotorControlApp:
             # Mode 5 uses same structure (val interpreted as speed)
             packet_data = struct.pack('>h', val)
             self.send_raw_packet(mid, mode, packet_data)
+            self.log(f"Sent ID:{mid} Mode:{mode} Val:{val}")
             
         except ValueError:
             messagebox.showerror("Error", "Invalid value format")
 
     def action_prepare_launch(self):
-        # Motor 0,1: Speed -4000
-        # Motor 2,3: Speed +4000
-        speed_neg = -4000
-        speed_pos = 4000
+        # Motor 0,1: Speed -Target (Inverted)
+        # Motor 2,3: Speed +Target
+        try:
+            target_speed = int(self.friction_speed_var.get())
+        except ValueError:
+            target_speed = 4000
+            self.log("Invalid speed, using default 4000", "red")
+            
+        speed_neg = -abs(target_speed)
+        speed_pos = abs(target_speed)
         
         # Mode 3 = Speed Mode
         data_neg = struct.pack('>h', speed_neg)
@@ -215,6 +496,8 @@ class MotorControlApp:
         self.send_raw_packet(2, 3, data_pos)
         time.sleep(0.01)
         self.send_raw_packet(3, 3, data_pos)
+        
+        self.log(f"Friction ON. Target Speed: {target_speed}", "green")
 
     def action_stop_friction(self):
         # Stop motors 0,1,2,3 (Set Speed to 0)
@@ -239,6 +522,16 @@ class MotorControlApp:
         
         self.send_raw_packet(mid, mode, data)
 
+    def action_reset_load(self):
+        # Motor 6 (Load) -> Mode 5 (RunToStall)
+        # Speed: -6000
+        speed = -6000
+        mid = 6
+        mode = 5
+        
+        data = struct.pack('>h', speed)
+        self.send_raw_packet(mid, mode, data)
+
     def send_yaw_command(self, event=None):
         # Motor 4 (Yaw) -> Mode 6 (RunToAngle)
         angle = self.yaw_angle_var.get() + 245000
@@ -257,13 +550,14 @@ class MotorControlApp:
         self.send_packet()
 
     def log(self, msg, color="black"):
-        self.log_text.config(state="normal")
-        self.log_text.insert("end", msg + "\n")
-        line_count = int(self.log_text.index('end-1c').split('.')[0])
-        self.log_text.tag_add("color", f"{line_count}.0", f"{line_count}.end")
-        self.log_text.tag_config("color", foreground=color)
-        self.log_text.see("end")
-        self.log_text.config(state="disabled")
+        if self.log_text:
+            self.log_text.config(state="normal")
+            self.log_text.insert("end", msg + "\n")
+            line_count = int(self.log_text.index('end-1c').split('.')[0])
+            self.log_text.tag_add("color", f"{line_count}.0", f"{line_count}.end")
+            self.log_text.tag_config("color", foreground=color)
+            self.log_text.see("end")
+            self.log_text.config(state="disabled")
 
 if __name__ == "__main__":
     root = tk.Tk()

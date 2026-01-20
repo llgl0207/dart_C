@@ -209,6 +209,25 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
   if(abs(deltaAngle) < 4096) motor->motorState.angle += deltaAngle;
 
 }
+void MotorCdcFeedback(uint8_t motor_SN){//发送motor_array对应序号电机的反馈信息到CDC
+  Motor *motor = motor_array[motor_SN];
+  uint8_t feedback[100];
+  feedback[0]=0x81;//由于约定CDC主机发送命令第一字节标志位从0x00开始，所以反馈从0x80开始(1000 0000 B)
+  feedback[1]=motor_SN; // 电机序号
+  feedback[2]=motor->motorState.singleAngle>>8;
+  feedback[3]=motor->motorState.singleAngle&0xFF;
+  feedback[4]=(int16_t)motor->motorState.rpm>>8;
+  feedback[5]=(int16_t)motor->motorState.rpm&0xFF;
+  feedback[6]=(int16_t)motor->motorState.torque>>8;
+  feedback[7]=(int16_t)motor->motorState.torque&0xFF;
+  feedback[8]=motor->motorState.tempr;
+  feedback[9]=(motor->enabled<<7|motor->motorState.isStalled<<6|motor->motorState.motorMode<<5);
+  feedback[10]=(int32_t)motor->motorState.angle>>24;
+  feedback[11]=(int32_t)motor->motorState.angle>>16;
+  feedback[12]=(int32_t)motor->motorState.angle>>8;
+  feedback[13]=(int32_t)motor->motorState.angle&0xFF;
+  CDC_Transmit_FS(feedback,14);
+}
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -858,6 +877,20 @@ void StartPidTask(void const * argument)
        }
     }
     osDelay(1);
+  }
+  /* USER CODE END StartDefaultTask */
+}
+void StartCdcTask(void const * argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    for(int i=0;i<MOTOR_NUM;i++){
+      MotorCdcFeedback(i);
+      osDelay(1); // 关键修改：增加延时，等待USB发送完成
+    }
+    osDelay(90); // 整体刷新频率控制
   }
   /* USER CODE END StartDefaultTask */
 }
