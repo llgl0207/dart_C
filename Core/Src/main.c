@@ -917,6 +917,7 @@ void StartTask2(void const * argument)
   lift.motorState.isStalled=0;
   //MotorRunToAngle(&lift,0,300);
   MotorRunToStall(&load,3000);
+  osDelay(100);
   MotorRunToStall(&load,-3000);
   osDelay(100);
   load.motorState.angle=0;
@@ -939,6 +940,10 @@ void StartTask2(void const * argument)
   for(;;)
   {//主程序在此处编写
     if(RunningTask==1){
+      MotorRunSpeedTimeBlocking(&lift,30000,3800);
+      osDelay(1000);
+      MotorRunSpeedTimeBlocking(&lift,-30000,3300);
+      MotorRunToStall(&load,3000);
       MotorRunSpeedTimeBlocking(&lift,30000,3800);
       osDelay(1000);
       MotorRunSpeedTimeBlocking(&lift,-30000,3300);
