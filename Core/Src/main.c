@@ -187,6 +187,18 @@ void MotorRunToAngle(Motor *motor, double angle, double speed){//以指定角度
   motor->motorState.isStalled = 0; // Clear flag
   MotorSetOutput(motor, angleMode, angle);
 }
+void MotorRunSpeedTime(Motor *motor, double speed, uint32_t time){//以指定速度运行指定时间
+  motor->runSpeed = speed;
+  motor->runTime = time;
+  motor->runTimer = 0; // Reset timer
+  MotorSetOutput(motor, speedTimeMode, 0);
+}
+void MotorRunSpeedTimeBlocking(Motor *motor, double speed, uint32_t time){//以指定速度运行指定时间(阻塞)
+  MotorRunSpeedTime(motor, speed, time);
+  while(motor->runTimer < motor->runTime){
+    osDelay(1);
+  }
+};
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);
 void TransferToMotorSend(Motor *motor){//根据电机的StdId来决定发送到哪个MotorSend结构体中
   int16_t out_int = (int16_t)motor->output;
@@ -541,9 +553,9 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
                  // Byte 3-4: Speed (int16, Big Endian)
                  int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
                  
-                 Motor *m = motor_array[motor_id];
-                 m->runSpeed = (double)val_int16;
-                 MotorSetOutput(m, runToStallMode, 0);
+                 Motor *motor = motor_array[motor_id];
+                 motor->runSpeed = (double)val_int16;
+                 MotorSetOutput(motor, runToStallMode, 0);
                  
              } else if (mode_val == 0x06 && Len >= 13) {
                  // Mode 6: RunToAngle (Non-blocking)
@@ -575,13 +587,7 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
 
                  int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
                  uint32_t val_time = (uint32_t)((Buf[5] << 24) | (Buf[6] << 16) | (Buf[7] << 8) | Buf[8]);
-                 
-                 Motor *m = motor_array[motor_id];
-                 m->runSpeed = (double)val_int16;
-                 m->runTime = val_time;
-                 m->runTimer = 0; // Reset timer
-                 
-                 MotorSetOutput(m, speedTimeMode, 0);
+                 MotorRunSpeedTime(motor_array[motor_id], (double)val_int16, val_time);
              }
         }
     }
@@ -854,8 +860,8 @@ void StartTask2(void const * argument)
   MotorSafetyInit(&lift, 35, 15000, 2000, 50, 100);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
-  MotorSafetyInit(&load, 35, 5000, 500, 50, 500);
-  load.enabled=0; // 装弹电机初始禁用
+  MotorSafetyInit(&load, 35, 5000, 500, 50, 100);
+  //load.enabled=0; // 装弹电机初始禁用
   MotorInit(&GM6020, 0x1FE, 0);
   MotorSafetyInit(&GM6020, 35, 5000, 1000, 50, 500);
 
@@ -873,7 +879,7 @@ void StartTask2(void const * argument)
   PidInit(&lift.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&lift.speedPid, 1, 0.01, 1, 9000.0, 0.0, 300);
   PidInit(&load.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&load.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
+  PidInit(&load.speedPid, 2, 0.01, 1, 3000.0, 0.0, 300);
   
   // 3. 设置初始输出为 0
   MotorSetOutput(&GM6020, speedMode, 0);
@@ -882,7 +888,7 @@ void StartTask2(void const * argument)
   MotorSetOutput(&fric3, angleMode, 0);
   MotorSetOutput(&fric4, angleMode, 0);
   MotorSetOutput(&lift, speedMode, 0);
-  MotorSetOutput(&load, angleMode, 0);
+  MotorSetOutput(&load, speedMode, 0);
 
 
 
@@ -910,6 +916,11 @@ void StartTask2(void const * argument)
   lift.motorState.angle=0;
   lift.motorState.isStalled=0;
   //MotorRunToAngle(&lift,0,300);
+  MotorRunToStall(&load,3000);
+  MotorRunToStall(&load,-3000);
+  osDelay(100);
+  load.motorState.angle=0;
+  load.motorState.isStalled=0;
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET); // 指示初始化完成
   osDelay(1000);
   MotorSetOutput(&fric1, speedMode, -4000);
@@ -928,11 +939,13 @@ void StartTask2(void const * argument)
   for(;;)
   {//主程序在此处编写
     if(RunningTask==1){
-      HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET);
+      MotorRunSpeedTimeBlocking(&lift,30000,3800);
+      osDelay(1000);
+      MotorRunSpeedTimeBlocking(&lift,-30000,3300);
       RunningTask=0;
     }
     if(RunningTask==2){
-      HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
+      
       RunningTask=0;
     }
     if(RunningTask==3){
