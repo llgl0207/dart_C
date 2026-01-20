@@ -242,6 +242,7 @@ void MotorCdcFeedback(uint8_t motor_SN){//发送motor_array对应序号电机的
     short int alarm_motor = -1; // 报警电机编号
     uint16_t alarm_counter = 0; // 报警计数器
     uint8_t CDC_Ctrl_state = 0; // CDC使能标志
+    uint8_t RunningTask = 0;// 运行任务标志，
 
 
 
@@ -477,7 +478,50 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
     // Byte 0: 0x00 (Header)
     // Byte 1: Motor ID (0-6)
     // Byte 2: Mode 
+/*
+    //////////////////////////////////////////////////
+    CDC数据包解释
+    指令数据包（发送给stm32）
+    Byte 0: 0x00
+      Byte 1: Motor ID (0-6)
+      Byte 2: Mode (0-7)
+        0: Disable
+        1: Current Mode
+          Byte 3-4: Value (int16, Big Endian)
+        2: Angle Mode
+          Byte 3-10: Value (double, Big Endian from Python)
+        3: Speed Mode
+          Byte 3-4: Value (int16, Big Endian)
+        4: Torque Mode
+          Byte 3-4: Value (int16, Big Endian)
+        5: RunToStall (Non-blocking)
+          Byte 3-4: Speed (int16, Big Endian)
+        6: RunToAngle (Non-blocking)
+          Byte 3-10: Angle (double, Big Endian from Python)
+          Byte 11-12: Speed (int16, Big Endian)
+        7: SpeedTimeMode (Non-blocking)
+          Byte 3-4: Speed (int16, Big Endian)
+          Byte 5-8: Time ms (uint32, Big Endian)
+    Byte 0: 0x01 (System Command)
+      Byte 1: 0x00 = Emergency Stop -> alarm_level=3, disable all motors
+      Byte 1: Other = Set RunningTask
+    ///////////////////////////////
+    反馈数据包（发送给stm32）
+    Byte 0: 0x81 (Header)
+      Byte 1: Motor ID (0-6)
+      Byte 2-3: Single Angle (uint16, Big Endian)
+      Byte 4-5: RPM (int16, Big Endian)
+      Byte 6-7: Torque (int16, Big Endian)
+      Byte 8: Temp (int8)
+      Byte 9: Flags (7: Enabled, 6: Stalled, 5-0: Mode)
+      Byte 10-13: Angle (double, Big Endian)
+    ///////////////////////////////
     
+    
+    
+    
+    /////////////////////////////////////////////////
+*/
     //if(CDC_Ctrl_state != 1) return; // 未连接时不处理
     if (Len >= 5 && Buf[0] == 0x00) {
         uint8_t motor_id = Buf[1];
@@ -539,6 +583,20 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
                  
                  MotorSetOutput(m, speedTimeMode, 0);
              }
+        }
+    }
+    else if (Len >= 2 && Buf[0] == 0x01) {
+        // System Command
+        // Byte 1: 0x00 = Emergency Stop -> alarm_level=3, disable all motors
+        // Byte 1: Other = Set RunningTask
+        
+        if (Buf[1] == 0x00) {
+            alarm_level = 3;
+            for(int i=0; i<MOTOR_NUM; i++){
+                motor_array[i]->enabled = 0;
+            }
+        } else {
+            RunningTask = Buf[1];
         }
     }
 
@@ -793,7 +851,7 @@ void StartTask2(void const * argument)
   MotorInit(&fric4, 0x200, 6);
   MotorSafetyInit(&fric4, 35, 5000, 500, 50, 500);
   MotorInit(&lift, 0x1FF, 4);
-  MotorSafetyInit(&lift, 35, 8000, 2000, 50, 100);
+  MotorSafetyInit(&lift, 35, 15000, 2000, 50, 100);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
   MotorSafetyInit(&load, 35, 5000, 500, 50, 500);
@@ -813,7 +871,7 @@ void StartTask2(void const * argument)
   PidInit(&fric4.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&fric4.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&lift.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&lift.speedPid, 1, 0.01, 1, 5000.0, 0.0, 300);
+  PidInit(&lift.speedPid, 1, 0.01, 1, 9000.0, 0.0, 300);
   PidInit(&load.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&load.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   
@@ -869,7 +927,20 @@ void StartTask2(void const * argument)
   /* Infinite loop */
   for(;;)
   {//主程序在此处编写
-    
+    if(RunningTask==1){
+      HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET);
+      RunningTask=0;
+    }
+    if(RunningTask==2){
+      HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
+      RunningTask=0;
+    }
+    if(RunningTask==3){
+      RunningTask=0;
+    }
+    if(RunningTask==4){
+      RunningTask=0;
+    }
     // 可以在这里改变 outerSpeedPid.setpoint 来动态调整速度
     //alarm_level = 2; // 测试报警
     osDelay(1);

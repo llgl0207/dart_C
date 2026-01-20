@@ -202,6 +202,19 @@ class MotorControlApp:
         self.btn_connect = ttk.Button(frame_conn, text="Connect", command=self.toggle_connection)
         self.btn_connect.pack(side="left", padx=5)
         
+        # New: System Control (0x01)
+        frame_sys = ttk.LabelFrame(parent, text="System Control (0x01)")
+        frame_sys.pack(fill="x", padx=10, pady=5)
+        
+        btn_halt = ttk.Button(frame_sys, text="EMERGENCY STOP (0x00)", command=self.action_emergency_stop)
+        btn_halt.pack(side="left", padx=5, fill="x", expand=True)
+        # Style the stop button red if possible, or just text
+        
+        ttk.Label(frame_sys, text="Set Task:").pack(side="left", padx=5)
+        self.run_task_var = tk.IntVar(value=1)
+        ttk.Entry(frame_sys, textvariable=self.run_task_var, width=5).pack(side="left", padx=2)
+        ttk.Button(frame_sys, text="Set RunningTask", command=self.action_set_task).pack(side="left", padx=5)
+
         # 2. 快捷控制区域 (New Features)
         frame_actions = ttk.LabelFrame(parent, text="Quick Actions")
         frame_actions.pack(fill="x", padx=10, pady=5)
@@ -545,6 +558,39 @@ class MotorControlApp:
         
         data = struct.pack('>h', speed)
         self.send_raw_packet(mid, mode, data)
+
+    def action_emergency_stop(self):
+        # Header 0x01, Cmd 0x00
+        if not self.connected or not self.ser: return
+        packet = struct.pack('BB', 0x01, 0x00)
+        try:
+            self.ser.write(packet)
+            self.log("SENT EMERGENCY STOP (0x01, 0x00)", "red")
+        except Exception as e:
+            self.log(f"Stop Error: {e}", "red")
+
+    def action_set_task(self):
+        # Header 0x01, Cmd = TaskID
+        try:
+            task_id = self.run_task_var.get()
+            if task_id == 0:
+                self.log("Task ID must be != 0 for execution", "orange")
+                # Though protocol allows sending whatever, user logic implies 0 is idle/reset in checking loops maybe? 
+                # Actually user code checks: if(RunningTask==1)... set to 0. 
+                # So we just send whatever user types.
+            
+            if not self.connected or not self.ser: return
+            
+            # Ensure byte range
+            task_id = max(0, min(255, task_id))
+            
+            packet = struct.pack('BB', 0x01, task_id)
+            self.ser.write(packet)
+            self.log(f"Set RunningTask = {task_id}")
+        except ValueError:
+            self.log("Invalid Task ID", "red")
+        except Exception as e:
+            self.log(f"Send Error: {e}", "red")
 
     def send_yaw_command(self, event=None):
         # Motor 4 (Yaw) -> Mode 6 (RunToAngle)
