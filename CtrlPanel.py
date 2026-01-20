@@ -27,6 +27,7 @@ class MotorControlApp:
         self.motor_id_var = tk.IntVar(value=0)
         self.mode_var = tk.StringVar(value="Disable")
         self.value_var = tk.IntVar(value=0)
+        self.time_var = tk.IntVar(value=1000) # Added: Time for SpeedTime mode
         self.friction_speed_var = tk.IntVar(value=4000) # Added: Friction wheel speed (default 4000)
         self.yaw_angle_var = tk.DoubleVar(value=0) # Slide range -245000 to 245000
         self.log_text = None
@@ -47,7 +48,8 @@ class MotorControlApp:
             "Speed (0x03)": 3,
             "Torque (0x04)": 4,
             "RunToStall (0x05)": 5,
-            "RunToAngle (0x06)": 6
+            "RunToAngle (0x06)": 6,
+            "SpeedTime (0x07)": 7
         }
         
         self.create_ui()
@@ -268,6 +270,10 @@ class MotorControlApp:
         entry_val.pack(side="left", padx=5)
         entry_val.bind('<Return>', lambda e: self.send_packet())
         
+        ttk.Label(frame_val, text="Time (ms):").pack(side="left", padx=5)
+        entry_time = ttk.Entry(frame_val, textvariable=self.time_var, width=10)
+        entry_time.pack(side="left", padx=5)
+        
         scale_val = ttk.Scale(frame_val, from_=-10000, to=10000, variable=self.value_var, orient="horizontal", length=200)
         scale_val.pack(side="left", padx=5)
         
@@ -466,9 +472,17 @@ class MotorControlApp:
             
             # Simple packet for standard modes + mode 5
             # Mode 5 uses same structure (val interpreted as speed)
-            packet_data = struct.pack('>h', val)
-            self.send_raw_packet(mid, mode, packet_data)
-            self.log(f"Sent ID:{mid} Mode:{mode} Val:{val}")
+            if mode == 7:
+                # Mode 7: SpeedTimeMode
+                # Speed (int16), Time (uint32)
+                time_ms = int(self.time_var.get())
+                packet_data = struct.pack('>hI', val, time_ms)
+                self.send_raw_packet(mid, mode, packet_data)
+                self.log(f"Sent ID:{mid} Mode:{mode} Speed:{val} Time:{time_ms}")
+            else:
+                packet_data = struct.pack('>h', val)
+                self.send_raw_packet(mid, mode, packet_data)
+                self.log(f"Sent ID:{mid} Mode:{mode} Val:{val}")
             
         except ValueError:
             messagebox.showerror("Error", "Invalid value format")

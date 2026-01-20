@@ -53,7 +53,7 @@ typedef struct{
   uint8_t data[8];
   uint32_t StdId;
 }MotorSend;//对应标志位的要发送的数据结构体
-enum MotorMode{disable,currentMode,angleMode,speedMode,torqueMode,runToAngle,runToStallMode};
+enum MotorMode{disable,currentMode,angleMode,speedMode,torqueMode,runToAngle,runToStallMode,speedTimeMode};
 typedef struct{
   uint16_t singleAngle;
   double rpm;
@@ -76,6 +76,8 @@ typedef struct{
   uint32_t stallTimeThreshold; // 堵转时间阈值(ms)
   double targetAngle; // For runToAngle
   double runSpeed;    // For runToAngle
+  uint32_t runTime;   // For speedTimeMode
+  uint32_t runTimer;  // For speedTimeMode
   MotorState motorState;
   Pid anglePid,speedPid,torquePid;
 }Motor;//对应每个电机的结构体
@@ -133,6 +135,8 @@ void MotorInit(Motor *motor,uint32_t StdId,uint8_t motor_byte)
   motor->motorState.stallTimer = 0;
   motor->targetAngle = 0;
   motor->runSpeed = 0;
+  motor->runTime = 0;
+  motor->runTimer = 0;
   
   // 初始化PID指针为空，防止未配置模式时误计算
   motor->anglePid.inputAdress = NULL;
@@ -520,6 +524,20 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
                  m->speedPid.inputAdress = &m->motorState.rpm;
                  m->speedPid.outputAdress = &m->output;
                  m->motorState.motorMode = runToAngle; 
+             } else if (mode_val == 0x07 && Len >= 9) {
+                 // Mode 7: SpeedTimeMode
+                 // Byte 3-4: Speed (int16, Big Endian)
+                 // Byte 5-8: Time ms (uint32, Big Endian)
+
+                 int16_t val_int16 = (int16_t)((Buf[3] << 8) | Buf[4]);
+                 uint32_t val_time = (uint32_t)((Buf[5] << 24) | (Buf[6] << 16) | (Buf[7] << 8) | Buf[8]);
+                 
+                 Motor *m = motor_array[motor_id];
+                 m->runSpeed = (double)val_int16;
+                 m->runTime = val_time;
+                 m->runTimer = 0; // Reset timer
+                 
+                 MotorSetOutput(m, speedTimeMode, 0);
              }
         }
     }
@@ -636,6 +654,15 @@ void MotorUpdate(void const * argument)
               m->motorState.isStalled = 0;
           } else {
               m->speedPid.setpoint = m->runSpeed;
+          }
+      } else if (m->motorState.motorMode == speedTimeMode) {
+          if (m->runTimer < m->runTime) {
+              m->runTimer++;
+              m->speedPid.setpoint = m->runSpeed;
+          } else {
+              m->motorState.motorMode = speedMode;
+              m->output = 0;
+              m->speedPid.setpoint = 0;
           }
       }
 
@@ -766,7 +793,7 @@ void StartTask2(void const * argument)
   MotorInit(&fric4, 0x200, 6);
   MotorSafetyInit(&fric4, 35, 5000, 500, 50, 500);
   MotorInit(&lift, 0x1FF, 4);
-  MotorSafetyInit(&lift, 35, 5000, 2000, 50, 500);
+  MotorSafetyInit(&lift, 35, 8000, 2000, 50, 100);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
   MotorSafetyInit(&load, 35, 5000, 500, 50, 500);
@@ -786,7 +813,7 @@ void StartTask2(void const * argument)
   PidInit(&fric4.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&fric4.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&lift.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&lift.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
+  PidInit(&lift.speedPid, 1, 0.01, 1, 5000.0, 0.0, 300);
   PidInit(&load.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&load.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   
@@ -867,6 +894,7 @@ void StartPidTask(void const * argument)
          case speedMode:
          case runToAngle: // runToAngle 本质上是速度环控制
          case runToStallMode: // runToStall 本质也是速度环
+         case speedTimeMode:
            PidCalculate(&m->speedPid);
            break;
          case torqueMode:
