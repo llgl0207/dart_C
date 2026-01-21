@@ -725,7 +725,9 @@ void MotorUpdate(void const * argument)
     for(int i=0;i<MOTOR_NUM;i++){
       Motor *m = motor_array[i];
       // PID calculation moved to StartPidTask
-      
+      if(m->motorState.motorMode == disable){
+        m->motorState.isStalled = 0; // Clear stalled flag
+      }
       // Handle runToAngle status
       if (m->motorState.motorMode == runToAngle) {
           // 如果堵转，切换到 angleMode 并在当前位置保持
@@ -759,7 +761,7 @@ void MotorUpdate(void const * argument)
               m->speedPid.setpoint = m->runSpeed;
           }
       } else if (m->motorState.motorMode == speedTimeMode) {
-          if (m->runTimer < m->runTime) {
+          if (m->runTimer < m->runTime&&m->motorState.isStalled==0) {
               m->runTimer++;
               m->speedPid.setpoint = m->runSpeed;
           } else {
@@ -906,13 +908,9 @@ void StartTask2(void const * argument)
   // 1. 初始化电机基本结构 MotorInit(*motor, StdId, MotorByte);
   //MotorSafetyInit(*motor, maxTemp, maxTorque, stallOutput, stallSpeedThreshold, stallTimeThreshold);  
   MotorInit(&fric1, 0x200, 0);
-  MotorSafetyInit(&fric1, 35, 5000, 500, 50, 500);
   MotorInit(&fric2, 0x200, 2);
-  MotorSafetyInit(&fric2, 35, 5000, 500, 50, 500);
   MotorInit(&fric3, 0x200, 4);
-  MotorSafetyInit(&fric3, 35, 5000, 500, 50, 500);
   MotorInit(&fric4, 0x200, 6);
-  MotorSafetyInit(&fric4, 35, 5000, 500, 50, 500);
   MotorInit(&lift, 0x1FF, 4);
   MotorSafetyInit(&lift, 35, 15000, 2000, 50, 100);
   //lift.enabled=0; // 升降电机初始禁用
@@ -925,14 +923,14 @@ void StartTask2(void const * argument)
   // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp,Ki,Kd,MaxOut,Deadband,I_Limit
   PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
   PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
+  for(int i=0;i<4;i++){
+    MotorSafetyInit(motor_array[i], 45, 10000, 500, 50, 500);
+    PidInit(&motor_array[i]->speedPid, 3, 0.01, 1, 9000.0, 0.0, 300);
+  }
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&fric1.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&fric2.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&fric2.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&fric3.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&fric3.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&fric4.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
-  PidInit(&fric4.speedPid, 1, 0.01, 1, 3000.0, 0.0, 300);
   PidInit(&lift.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&lift.speedPid, 1, 0.01, 1, 9000.0, 0.0, 300);
   PidInit(&load.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
