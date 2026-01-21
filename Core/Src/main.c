@@ -587,7 +587,7 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
         1: Current Mode
           Byte 3-4: Value (int16, Big Endian)
         2: Angle Mode
-          Byte 3-10: Value (double, Big Endian from Python)
+          Byte 3-4: Value (int16, Big Endian)
         3: Speed Mode
           Byte 3-4: Value (int16, Big Endian)
         4: Torque Mode
@@ -604,7 +604,7 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
       Byte 1: 0x00 = Emergency Stop -> alarm_level=3, disable all motors
       Byte 1: Other = Set RunningTask
     ///////////////////////////////
-    反馈数据包（发送给stm32）
+    反馈数据包（发送给上位机）
     Byte 0: 0x81 (Header)
       Byte 1: Motor ID (0-6)
       Byte 2-3: Single Angle (uint16, Big Endian)
@@ -612,7 +612,7 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
       Byte 6-7: Torque (int16, Big Endian)
       Byte 8: Temp (int8)
       Byte 9: Flags (7: Enabled, 6: Stalled, 5-0: Mode)
-      Byte 10-13: Angle (double, Big Endian)
+      Byte 10-13: Total Angle (int32, Big Endian)
     ///////////////////////////////
     
     
@@ -924,7 +924,7 @@ void StartTask2(void const * argument)
   PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
   PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
   for(int i=0;i<4;i++){
-    MotorSafetyInit(motor_array[i], 45, 10000, 500, 50, 100);
+    MotorSafetyInit(motor_array[i], 45, 20000, 500, 50, 100);
     PidInit(&motor_array[i]->speedPid, 3, 0.01, 1, 9000.0, 0.0, 300);
   }
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
@@ -993,12 +993,13 @@ void StartTask2(void const * argument)
   {//RunningTask执行的任务在此处编写
     if(RunningTask==1){
       MotorRunSpeedTimeBlocking(&lift,30000,3800);
-      osDelay(100);
-      MotorRunSpeedTimeBlocking(&lift,-30000,3300);
-      MotorRunToStall(&load,3000);
-      MotorRunSpeedTimeBlocking(&lift,30000,3800);
-      osDelay(100);
-      MotorRunSpeedTimeBlocking(&lift,-30000,3300);
+      osDelay(1000);
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
+      MotorRunSpeedTimeBlocking(&lift,-30000,2500);
+      MotorRunToStall(&lift,-6000);
       RunningTask=0;
     }
     if(RunningTask==2){

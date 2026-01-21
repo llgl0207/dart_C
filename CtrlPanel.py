@@ -28,7 +28,8 @@ class MotorControlApp:
         self.mode_var = tk.StringVar(value="Disable")
         self.value_var = tk.IntVar(value=0)
         self.time_var = tk.IntVar(value=1000) # Added: Time for SpeedTime mode
-        self.friction_speed_var = tk.IntVar(value=4000) # Added: Friction wheel speed (default 4000)
+        self.friction_speed_var = tk.IntVar(value=4000) # Added: Friction wheel speed 1 (default 4000)
+        self.friction_speed_2_var = tk.IntVar(value=4000) # Added: Friction wheel speed 2 (default 4000)
         self.yaw_angle_var = tk.DoubleVar(value=0) # Slide range -245000 to 245000
         self.log_text = None
         
@@ -225,8 +226,11 @@ class MotorControlApp:
         ttk.Label(frame_launch, text="Dart Launch:").pack(side="left")
         
         # Friction Speed Input
-        ttk.Label(frame_launch, text="Speed:").pack(side="left", padx=2)
+        ttk.Label(frame_launch, text="Speed 1:").pack(side="left", padx=2)
         ttk.Entry(frame_launch, textvariable=self.friction_speed_var, width=6).pack(side="left", padx=2)
+
+        ttk.Label(frame_launch, text="Speed 2:").pack(side="left", padx=2)
+        ttk.Entry(frame_launch, textvariable=self.friction_speed_2_var, width=6).pack(side="left", padx=2)
         
         ttk.Button(frame_launch, text="Prepare Launch (Friction ON)", command=self.action_prepare_launch).pack(side="left", padx=5)
         ttk.Button(frame_launch, text="Stop Friction (OFF)", command=self.action_stop_friction).pack(side="left", padx=5)
@@ -501,30 +505,49 @@ class MotorControlApp:
             messagebox.showerror("Error", "Invalid value format")
 
     def action_prepare_launch(self):
-        # Motor 0,1: Speed -Target (Inverted)
-        # Motor 2,3: Speed +Target
+        # Motor 0,2: Speed 1 (1st stage) - Motor 0 Neg, Motor 2 Pos
+        # Motor 1,3: Speed 2 (2nd stage) - Motor 1 Neg, Motor 3 Pos
         try:
-            target_speed = int(self.friction_speed_var.get())
+            target_speed_1 = int(self.friction_speed_var.get())
         except ValueError:
-            target_speed = 4000
-            self.log("Invalid speed, using default 4000", "red")
+            target_speed_1 = 4000
+            self.log("Invalid speed 1, using default 4000", "red")
+
+        try:
+            target_speed_2 = int(self.friction_speed_2_var.get())
+        except ValueError:
+            target_speed_2 = 4000
+            self.log("Invalid speed 2, using default 4000", "red")
             
-        speed_neg = -abs(target_speed)
-        speed_pos = abs(target_speed)
+        speed1_neg = -abs(target_speed_1)
+        speed1_pos = abs(target_speed_1)
+        
+        speed2_neg = -abs(target_speed_2)
+        speed2_pos = abs(target_speed_2)
         
         # Mode 3 = Speed Mode
-        data_neg = struct.pack('>h', speed_neg)
-        data_pos = struct.pack('>h', speed_pos)
+        data1_neg = struct.pack('>h', speed1_neg)
+        data1_pos = struct.pack('>h', speed1_pos)
         
-        self.send_raw_packet(0, 3, data_neg)
-        time.sleep(0.01)
-        self.send_raw_packet(1, 3, data_neg)
-        time.sleep(0.01)
-        self.send_raw_packet(2, 3, data_pos)
-        time.sleep(0.01)
-        self.send_raw_packet(3, 3, data_pos)
+        data2_neg = struct.pack('>h', speed2_neg)
+        data2_pos = struct.pack('>h', speed2_pos)
         
-        self.log(f"Friction ON. Target Speed: {target_speed}", "green")
+        # Motor 0 (Stage 1 Neg)
+        self.send_raw_packet(0, 3, data1_neg)
+        time.sleep(0.01)
+        
+        # Motor 1 (Stage 2 Neg)
+        self.send_raw_packet(1, 3, data2_neg)
+        time.sleep(0.01)
+        
+        # Motor 2 (Stage 1 Pos)
+        self.send_raw_packet(2, 3, data1_pos)
+        time.sleep(0.01)
+        
+        # Motor 3 (Stage 2 Pos)
+        self.send_raw_packet(3, 3, data2_pos)
+        
+        self.log(f"Friction ON. Stage 1: {target_speed_1}, Stage 2: {target_speed_2}", "green")
 
     def action_stop_friction(self):
         # Stop motors 0,1,2,3 (Set Speed to 0)
