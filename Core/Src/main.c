@@ -912,19 +912,19 @@ void StartTask2(void const * argument)
   MotorInit(&fric3, 0x200, 4);
   MotorInit(&fric4, 0x200, 6);
   MotorInit(&lift, 0x1FF, 4);
-  MotorSafetyInit(&lift, 35, 15000, 2000, 50, 100);
+  MotorSafetyInit(&lift, 35, 15000, 2000, 50,100);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
   MotorSafetyInit(&load, 35, 5000, 500, 50, 100);
   //load.enabled=0; // 装弹电机初始禁用
   MotorInit(&GM6020, 0x1FE, 0);
-  MotorSafetyInit(&GM6020, 35, 5000, 1000, 50, 500);
+  MotorSafetyInit(&GM6020, 35, 5000, 1000, 50, 100);
 
   // 2. 初始化 GM6020 角度环 PID (内环) 参数: Kp,Ki,Kd,MaxOut,Deadband,I_Limit
   PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
   PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
   for(int i=0;i<4;i++){
-    MotorSafetyInit(motor_array[i], 45, 10000, 500, 50, 500);
+    MotorSafetyInit(motor_array[i], 45, 10000, 500, 50, 100);
     PidInit(&motor_array[i]->speedPid, 3, 0.01, 1, 9000.0, 0.0, 300);
   }
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
@@ -979,7 +979,7 @@ void StartTask2(void const * argument)
   MotorSetOutput(&fric2, speedMode, -4000);
   MotorSetOutput(&fric3, speedMode, 4000);
   MotorSetOutput(&fric4, speedMode, 4000);
-  osDelay(3000);
+  osDelay(1000);
   MotorSetOutput(&fric1, speedMode, 0);
   MotorSetOutput(&fric2, speedMode, 0);
   MotorSetOutput(&fric3, speedMode, 0);
@@ -1002,6 +1002,11 @@ void StartTask2(void const * argument)
       RunningTask=0;
     }
     if(RunningTask==2){
+      while(RunningTask==2){
+        MotorRunToAngle(&GM6020,400000,600);
+        MotorRunToAngle(&GM6020,10000,600);
+      }
+
       //在此处写程序
       RunningTask=0;
     }
