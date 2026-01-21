@@ -23,3 +23,49 @@ CAN的最终发送由定时器TIM2中断控制，TIM2中断回调使得stm32以�
 得益于PID结构体的存在，所有电机的所有PID模式其实都是同样的结构，它们的输入输出不同取决于指针的配置。这也意味着其实你可以自己创建一个单独的PID，它和电机无关，可以是任何你已经有的输入值，只要你把它放入输入指针中。你想让它输出到哪，也只需要配置相应的输出指针。当前电机默认的PID都是单环PID，如果你需要串级PID，你可以尝试手动创建一个PID结构体，然后把相应的PidCalculate函数加入到StartPidTask中。
 
 与上位机的通信采用USB-CDC。接收上位机的指令采用中断触发，当stm32接收到来自上位机的指令时会触发中断回调并且当场分析指令意图并执行指令。同时stm32也会以约10Hz的频率通过CDC反馈所有电机的状态给上位机，不论是指令信息还是反馈信息均采用约定的数据包规则，具体规则详见代码中的注释。
+```C
+/*
+    //////////////////////////////////////////////////
+    CDC数据包解释
+    指令数据包（发送给stm32）
+    Byte 0: 0x00
+      Byte 1: Motor ID (0-6)
+      Byte 2: Mode (0-7)
+        0: Disable
+        1: Current Mode
+          Byte 3-4: Value (int16, Big Endian)
+        2: Angle Mode
+          Byte 3-10: Value (double, Big Endian from Python)
+        3: Speed Mode
+          Byte 3-4: Value (int16, Big Endian)
+        4: Torque Mode
+          Byte 3-4: Value (int16, Big Endian)
+        5: RunToStall (Non-blocking)
+          Byte 3-4: Speed (int16, Big Endian)
+        6: RunToAngle (Non-blocking)
+          Byte 3-10: Angle (double, Big Endian from Python)
+          Byte 11-12: Speed (int16, Big Endian)
+        7: SpeedTimeMode (Non-blocking)
+          Byte 3-4: Speed (int16, Big Endian)
+          Byte 5-8: Time ms (uint32, Big Endian)
+    Byte 0: 0x01 (System Command)
+      Byte 1: 0x00 = Emergency Stop -> alarm_level=3, disable all motors
+      Byte 1: Other = Set RunningTask
+    ///////////////////////////////
+    反馈数据包（发送给stm32）
+    Byte 0: 0x81 (Header)
+      Byte 1: Motor ID (0-6)
+      Byte 2-3: Single Angle (uint16, Big Endian)
+      Byte 4-5: RPM (int16, Big Endian)
+      Byte 6-7: Torque (int16, Big Endian)
+      Byte 8: Temp (int8)
+      Byte 9: Flags (7: Enabled, 6: Stalled, 5-0: Mode)
+      Byte 10-13: Angle (double, Big Endian)
+    ///////////////////////////////
+    
+    
+    
+    
+    /////////////////////////////////////////////////
+*/
+```
