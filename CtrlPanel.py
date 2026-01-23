@@ -221,20 +221,30 @@ class MotorControlApp:
         frame_actions.pack(fill="x", padx=10, pady=5)
         
         # Dart Launch Controls
-        frame_launch = ttk.Frame(frame_actions)
-        frame_launch.pack(fill="x", padx=5, pady=5)
-        ttk.Label(frame_launch, text="Dart Launch:").pack(side="left")
+        # Row 1: Friction Control
+        frame_launch_1 = ttk.Frame(frame_actions)
+        frame_launch_1.pack(fill="x", padx=5, pady=2)
+        ttk.Label(frame_launch_1, text="Friction Control:").pack(side="left")
         
         # Friction Speed Input
-        ttk.Label(frame_launch, text="Speed 1:").pack(side="left", padx=2)
-        ttk.Entry(frame_launch, textvariable=self.friction_speed_var, width=6).pack(side="left", padx=2)
+        ttk.Label(frame_launch_1, text="Speed 1:").pack(side="left", padx=2)
+        ttk.Entry(frame_launch_1, textvariable=self.friction_speed_var, width=6).pack(side="left", padx=2)
 
-        ttk.Label(frame_launch, text="Speed 2:").pack(side="left", padx=2)
-        ttk.Entry(frame_launch, textvariable=self.friction_speed_2_var, width=6).pack(side="left", padx=2)
+        ttk.Label(frame_launch_1, text="Speed 2:").pack(side="left", padx=2)
+        ttk.Entry(frame_launch_1, textvariable=self.friction_speed_2_var, width=6).pack(side="left", padx=2)
         
-        ttk.Button(frame_launch, text="Prepare Launch (Friction ON)", command=self.action_prepare_launch).pack(side="left", padx=5)
-        ttk.Button(frame_launch, text="Stop Friction (OFF)", command=self.action_stop_friction).pack(side="left", padx=5)
+        ttk.Button(frame_launch_1, text="Prepare Launch (Friction ON)", command=self.action_prepare_launch).pack(side="left", padx=5)
+        ttk.Button(frame_launch_1, text="Stop Friction (OFF)", command=self.action_stop_friction).pack(side="left", padx=5)
+
+        # Row 2: Feed & Launch
+        frame_launch_2 = ttk.Frame(frame_actions)
+        frame_launch_2.pack(fill="x", padx=5, pady=2)
+        ttk.Label(frame_launch_2, text="Launch Actions:").pack(side="left")
+        ttk.Button(frame_launch_2, text="Feed (In)", command=self.action_feed_in).pack(side="left", padx=5)
+        ttk.Button(frame_launch_2, text="Feed (Out)", command=self.action_feed_out).pack(side="left", padx=5)
         
+        ttk.Button(frame_launch_2, text="ONE CLICK LAUNCH", command=self.action_one_click_launch).pack(side="left", padx=5)
+
         # Loading Mechanism (Lift - ID 6)
         frame_load = ttk.Frame(frame_actions)
         frame_load.pack(fill="x", padx=5, pady=5)
@@ -251,6 +261,13 @@ class MotorControlApp:
         self.yaw_scale.pack(side="left", padx=5)
         self.lbl_yaw_val = ttk.Label(frame_yaw, text="0")
         self.lbl_yaw_val.pack(side="left", padx=5)
+        
+        # Yaw Input Entry
+        entry_yaw = ttk.Entry(frame_yaw, textvariable=self.yaw_angle_var, width=10)
+        entry_yaw.pack(side="left", padx=5)
+        entry_yaw.bind('<Return>', lambda e: self.send_yaw_command())
+
+        ttk.Button(frame_yaw, text="Set", command=self.send_yaw_command).pack(side="left", padx=5)
         
         # Slider value update label
         self.yaw_scale.bind("<Motion>", self.update_yaw_label)
@@ -557,6 +574,51 @@ class MotorControlApp:
         for mid in range(4):
             self.send_raw_packet(mid, 3, data_zero) # Mode 3 (Speed) -> 0
             time.sleep(0.01)
+
+    def action_one_click_launch(self):
+        # 1. Prepare Launch (Friction ON)
+        self.log(">>> [One-Click] Starting Launch Sequence...", "blue")
+        self.action_prepare_launch()
+        
+        # 2. Set Task (triggers launch logic on MCU)
+        # Add a small delay to ensure friction commands are processed if needed, 
+        # though send_raw_packet is synchronous.
+        time.sleep(0.05) 
+        self.action_set_task()
+        self.log(">>> [One-Click] Launch Sequence Triggered", "blue")
+
+    def action_feed_in(self):
+        # 0,1 are +100, 2,3 are -100
+        # Mode 3 (Speed)
+        speed_pos = 100
+        speed_neg = -100
+        data_pos = struct.pack('>h', speed_pos)
+        data_neg = struct.pack('>h', speed_neg)
+        
+        self.send_raw_packet(0, 3, data_pos)
+        time.sleep(0.01)
+        self.send_raw_packet(1, 3, data_pos)
+        time.sleep(0.01)
+        self.send_raw_packet(2, 3, data_neg)
+        time.sleep(0.01)
+        self.send_raw_packet(3, 3, data_neg)
+        self.log("Feed IN (0,1=+100, 2,3=-100)", "green")
+
+    def action_feed_out(self):
+        # Opposite: 0,1 are -100, 2,3 are +100
+        speed_pos = 100
+        speed_neg = -100
+        data_pos = struct.pack('>h', speed_pos)
+        data_neg = struct.pack('>h', speed_neg)
+        
+        self.send_raw_packet(0, 3, data_neg)
+        time.sleep(0.01)
+        self.send_raw_packet(1, 3, data_neg)
+        time.sleep(0.01)
+        self.send_raw_packet(2, 3, data_pos)
+        time.sleep(0.01)
+        self.send_raw_packet(3, 3, data_pos)
+        self.log("Feed OUT (0,1=-100, 2,3=+100)", "green")
 
     def action_lift_to(self, angle):
         # Motor 6 (Load) -> Mode 6 (RunToAngle)

@@ -107,6 +107,9 @@ void CAN_SendMessage(uint8_t *data, uint32_t StdId);//发送CAN消息
 void TransferToMotorSend(Motor *motor);//根据电机的StdId来决定发送到哪个MotorSend结构体中
 void CanSendMotor(MotorSend *motorsend);//发送对应的MotorSend结构体
 void MotorCdcFeedback(uint8_t motor_SN);//发送motor_array对应序号电机的反馈信息到CDC
+
+void Singing();//整活
+void SingingSome();//唱一小段
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -116,7 +119,8 @@ void MotorCdcFeedback(uint8_t motor_SN);//发送motor_array对应序号电机的
     short int alarm_motor = -1; // 报警电机编号
     uint16_t alarm_counter = 0; // 报警计数器
     uint8_t CDC_Ctrl_state = 0; // CDC使能标志
-    uint8_t RunningTask = 0;// 运行任务标志，
+    uint8_t RunningTask = 0;// 运行任务标志
+    uint8_t MotorUpdateFlag = 1; // 电机更新标志
 
     MotorSend _1FE={{0x00},0x1FE},
     _1FF={{0x00},0x1FF},
@@ -493,9 +497,10 @@ void MotorRunToStall(Motor *motor, double speed){
     osDelay(1);
   }
   motor->motorState.isStalled=0;
+  motor->motorState.motorMode=disable;
   motor->motorState.stallTimer=0;
-  motor->motorState.motorMode = disable;
   motor->speedPid.setpoint = 0;
+  //MotorSetOutput(motor,angleMode, motor->motorState.angle);
   motor->output = 0;
 }
 
@@ -697,6 +702,76 @@ void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
     CDC_Transmit_FS(Buf, Len);
 }
 
+#define LENGTH 624
+const uint8_t Music_Score[LENGTH]={
+	
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,60,60,65,65,69,69,74,74,74,74,74,74,74,74,74,74,74,74,72,72,72,72,72,72,72,72,72,72,70,70,69,69,69,69,69,69,67,67,67,67,69,69,62,62,62,62,62,0,64,64,64,64,62,62,60,60,60,60,60,60,72,72,72,70,70,70,69,69,69,67,67,67,67,67,67,69,69,69,65,65,65,65,65,0,65,65,0,65,65,0,65,65,65,0,0,0,60,60,0,60,60,60,65,65,65,65,65,65,67,67,67,67,67,67,69,69,69,69,69,69,67,67,67,69,69,69,67,67,67,67,67,67,65,65,65,65,65,65,64,64,64,62,62,62,62,62,62,64,64,64,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,62,62,0,62,62,62,67,67,67,67,67,67,69,69,69,69,69,69,70,70,70,70,70,70,74,74,0,74,74,74,72,72,72,72,72,72,65,65,65,65,65,65,70,70,70,69,69,69,69,69,69,65,65,65,67,67,67,67,67,67,67,67,67,67,67,67,67,67,67,67,67,67,69,69,69,70,70,70,72,72,72,72,72,72,72,72,72,72,72,0,72,72,72,72,72,72,70,70,0,70,70,70,69,69,69,69,69,69,65,65,65,65,65,65,64,64,64,64,64,64,65,65,65,65,65,65,62,62,62,62,62,62,62,62,62,62,62,62,62,62,62,62,62,62,67,67,67,69,69,69,70,70,70,70,70,70,70,70,70,70,70,70,74,74,74,74,74,74,72,72,72,74,74,74,72,72,72,72,72,72,70,70,70,70,70,70,69,69,69,67,67,67,67,67,67,69,69,69,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,74,74,74,74,74,74,74,74,0,74,74,74,72,72,0,72,72,72,65,65,65,67,67,67,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,74,74,74,74,74,74,74,74,0,74,74,74,72,72,0,72,72,72,65,65,65,67,67,67,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,70,70,70,0,70,70,69,69,69,65,65,65,62,62,62,62,62,62,62,62,62,62,62,62,70,70,70,0,70,70,69,69,69,65,65,65,62,62,62,62,62,62,60,60,0,60,60,60,65,65,65,65,65,65,69,69,69,69,69,69,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,74,72,72,0,72,72,72,72,72,72,70,70,70,69,69,69,67,67,67,67,67,67,69,69,69,65,65,65,65,65,65,65,65,65,65,65,65
+	
+};
+void Singing(){
+  MotorUpdateFlag=0;
+  for(int i=0;i<LENGTH;i++){
+    if(Music_Score[i]==0){
+      __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
+    }else{
+            // 现场计算频率 (Base: C3=130.81Hz, C4=261.63Hz)
+            // C Major semitones: 0(C), 2(D), 4(E), 5(F), 7(G), 9(A), 11(B)
+            //int semitones_map[] = {0, 2, 4, 5, 7, 9, 11};
+            // Correct formula: freq = 440 * 2^((n-69)/12) OR 261.63 * 2^((n-60)/12)
+            float freq = 261.63f * pow(2.0f, (float)(Music_Score[i] - 60) / 12.0f);
+            
+            // Limit frequency to avoid div by zero or extreme values
+            if(freq < 20.0f) freq = 20.0f;
+            if(freq > 20000.0f) freq = 20000.0f;
+
+            // ARR = (TimerClock / Frequency) - 1. TimerClock = 1MHz
+            uint32_t reload = (uint32_t)(1000000.0f / freq) - 1;
+            __HAL_TIM_SET_AUTORELOAD(&htim4, reload);
+            // 同时更新占空比为50% (CCR = ARR/2)
+             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, reload / 2);
+    }
+    osDelay(75);
+    if(RunningTask!=3){
+      MotorUpdateFlag=1;
+      return;
+    }        
+  }
+  MotorUpdateFlag=1;
+  return;
+}
+
+#define LENGTH_SOME 93
+const uint8_t Music_Score_Some[LENGTH_SOME]={
+	
+	60,60,65,65,69,69,74,74,74,74,74,74,74,74,74,74,74,74,72,72,72,72,72,72,72,72,72,72,70,70,69,69,69,69,69,69,67,67,67,67,69,69,62,62,62,62,62,0,64,64,64,64,62,62,60,60,60,60,60,60,72,72,72,70,70,70,69,69,69,67,67,67,67,67,67,69,69,69,65,65,65,65,65,0,65,65,0,65,65,0,65,65,65
+};
+void SingingSome(){
+  MotorUpdateFlag=0;
+  for(int i=0;i<LENGTH_SOME;i++){
+    if(Music_Score_Some[i]==0){
+      __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
+    }else{
+            // 现场计算频率 (Base: C3=130.81Hz, C4=261.63Hz)
+            // C Major semitones: 0(C), 2(D), 4(E), 5(F), 7(G), 9(A), 11(B)
+            //int semitones_map[] = {0, 2, 4, 5, 7, 9, 11};
+            // Correct formula: freq = 440 * 2^((n-69)/12) OR 261.63 * 2^((n-60)/12)
+            float freq = 261.63f * pow(2.0f, (float)(Music_Score_Some[i] - 60) / 12.0f);
+            
+            // Limit frequency to avoid div by zero or extreme values
+            if(freq < 20.0f) freq = 20.0f;
+            if(freq > 20000.0f) freq = 20000.0f;
+
+            // ARR = (TimerClock / Frequency) - 1. TimerClock = 1MHz
+            uint32_t reload = (uint32_t)(1000000.0f / freq) - 1;
+            __HAL_TIM_SET_AUTORELOAD(&htim4, reload);
+            // 同时更新占空比为50% (CCR = ARR/2)
+             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, reload / 2);
+    }
+    osDelay(50); 
+  }
+  MotorUpdateFlag=1;
+  return;
+}
 ////////////////////////////////////////////////////////////////////////////////////
 //                                                                                //
 //                                                                                //
@@ -720,6 +795,7 @@ void MotorUpdate(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+    
     // alarm_level 不在每次循环重置，保持报警状态直到系统复位或手动清除
 
     for(int i=0;i<MOTOR_NUM;i++){
@@ -785,7 +861,7 @@ void MotorUpdate(void const * argument)
       if (m->motorState.stallTimer > m->stallTimeThreshold) {
           m->motorState.isStalled = 1;
       }
-
+      if(MotorUpdateFlag==1){
       // 检测到堵转状态上升沿 (0 -> 1)，触发一次短响
       if (prev_stalled == 0 && m->motorState.isStalled == 1) {
           buzzer_oneshot = 200; // 触发200ms短响
@@ -819,9 +895,10 @@ void MotorUpdate(void const * argument)
         alarm_motor = i+1;
         alarm_counter++;
       }
+    }
       
 
-      if (m->enabled == 0) {
+      if (m->enabled == 0||MotorUpdateFlag == 0) {
           m->output = 0;
       }
 
@@ -851,7 +928,9 @@ void MotorUpdate(void const * argument)
         }
     }
     else if (alarm_level == 0) {
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 正常情况静音
+        if(MotorUpdateFlag == 1) {
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 正常情况静音
+        }
         buzzer_tick = 0; // 复位保持同步
     } else {
         // 通用报警逻辑：响 alarm_level 次
@@ -924,8 +1003,8 @@ void StartTask2(void const * argument)
   PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
   PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
   for(int i=0;i<4;i++){
-    MotorSafetyInit(motor_array[i], 45, 20000, 500, 50, 100);
-    PidInit(&motor_array[i]->speedPid, 3, 0.01, 1, 9000.0, 0.0, 300);
+    MotorSafetyInit(motor_array[i], 45, 35000, 500, 50, 100);
+    PidInit(&motor_array[i]->speedPid, 60, 1, 1, 30000.0, 0.0, 30000);
   }
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&fric2.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
@@ -958,6 +1037,8 @@ void StartTask2(void const * argument)
 
   /////////////////////////以下为上电初始化程序////////////////////////////
   //上电初始化，GM6020和lift走到负方向限位
+  osDelay(1000);
+  SingingSome();//播放部分音乐以示启动
   MotorRunToStall(&GM6020,-300);
   GM6020.motorState.angle=0;
   MotorRunToAngle(&GM6020,245000,300);
@@ -992,27 +1073,38 @@ void StartTask2(void const * argument)
   for(;;)
   {//RunningTask执行的任务在此处编写
     if(RunningTask==1){
-      MotorRunSpeedTimeBlocking(&lift,30000,3800);
+      
+      MotorRunSpeedTimeBlocking(&lift,30000,3500);
       osDelay(1000);
-      MotorSetOutput(&fric1, speedMode, 0);
-      MotorSetOutput(&fric2, speedMode, 0);
-      MotorSetOutput(&fric3, speedMode, 0);
-      MotorSetOutput(&fric4, speedMode, 0);
+      MotorSetOutput(&fric1, speedMode, 100);
+      MotorSetOutput(&fric2, speedMode, 100);
+      MotorSetOutput(&fric3, speedMode, -100);
+      MotorSetOutput(&fric4, speedMode, -100);
       MotorRunSpeedTimeBlocking(&lift,-30000,2500);
       MotorRunToStall(&lift,-6000);
       RunningTask=0;
     }
     if(RunningTask==2){
-      while(RunningTask==2){
+      /* while(RunningTask==2){
         MotorRunToAngle(&GM6020,400000,600);
         MotorRunToAngle(&GM6020,10000,600);
       }
-
+ */
+      osDelay(10000);
+      MotorRunSpeedTimeBlocking(&lift,30000,3500);
+      osDelay(1000);
+      MotorSetOutput(&fric1, speedMode, 100);
+      MotorSetOutput(&fric2, speedMode, 100);
+      MotorSetOutput(&fric3, speedMode, -100);
+      MotorSetOutput(&fric4, speedMode, -100);
+      MotorRunSpeedTimeBlocking(&lift,-30000,2500);
+      MotorRunToStall(&lift,-6000);
       //在此处写程序
       RunningTask=0;
     }
     if(RunningTask==3){
       //在此处写程序
+      Singing();//播放音乐
       RunningTask=0;
     }
     if(RunningTask==4){
