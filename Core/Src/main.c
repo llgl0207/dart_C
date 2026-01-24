@@ -242,6 +242,9 @@ int main(void)
   {
     Error_Handler();
   }
+
+  HAL_Delay(3000);
+  HAL_GPIO_WritePin(LED_B_GPIO_Port, LED_B_Pin, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Call init function for freertos objects (in cmsis_os2.c) */
@@ -788,7 +791,7 @@ void MotorUpdate(void const * argument)
   static int buzzer_oneshot = 0; // 短响计时器
   
   alarm_level = 0;
-  osDelay(1000);
+
   // 确保开启 TIM4 CH3 的 PWM 输出
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
 
@@ -991,7 +994,7 @@ void StartTask2(void const * argument)
   MotorInit(&fric3, 0x200, 4);
   MotorInit(&fric4, 0x200, 6);
   MotorInit(&lift, 0x1FF, 4);
-  MotorSafetyInit(&lift, 35, 15000, 2000, 50,100);
+  MotorSafetyInit(&lift, 35, 20000, 2000, 50,100);
   //lift.enabled=0; // 升降电机初始禁用
   MotorInit(&load, 0x1FF, 2);
   MotorSafetyInit(&load, 35, 5000, 500, 50, 100);
@@ -1003,7 +1006,7 @@ void StartTask2(void const * argument)
   PidInit(&GM6020.anglePid, 1.0, 0.0, 0.0, 4000.0, 0.0, 0.0);
   PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
   for(int i=0;i<4;i++){
-    MotorSafetyInit(motor_array[i], 45, 35000, 500, 50, 100);
+    MotorSafetyInit(motor_array[i], 55, 35000, 500, 50, 100);
     PidInit(&motor_array[i]->speedPid, 60, 1, 1, 30000.0, 0.0, 30000);
   }
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
@@ -1037,8 +1040,8 @@ void StartTask2(void const * argument)
 
   /////////////////////////以下为上电初始化程序////////////////////////////
   //上电初始化，GM6020和lift走到负方向限位
-  osDelay(1000);
-  SingingSome();//播放部分音乐以示启动
+  //osDelay(1000);
+  //SingingSome();//播放部分音乐以示启动
   MotorRunToStall(&GM6020,-300);
   GM6020.motorState.angle=0;
   MotorRunToAngle(&GM6020,245000,300);
@@ -1047,6 +1050,7 @@ void StartTask2(void const * argument)
   osDelay(100);
   lift.motorState.angle=0;
   lift.motorState.isStalled=0;
+    MotorRunSpeedTimeBlocking(&lift,3000,500);
   //MotorRunToAngle(&lift,0,300);
   MotorRunToStall(&load,3000);
   osDelay(100);
@@ -1067,13 +1071,21 @@ void StartTask2(void const * argument)
   MotorSetOutput(&fric4, speedMode, 0);
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LED_G_GPIO_Port, LED_G_Pin, GPIO_PIN_SET); // 指示准备完成
+  alarm_level=0;
   CDC_Ctrl_state = 1; // CDC 连接完成，允许接收控制命令
   ////////////////////////////////////////////////////////////////////////////
   /* Infinite loop */
   for(;;)
   {//RunningTask执行的任务在此处编写
+    if(fabs(lift.motorState.rpm)>600){
+      osDelay(1000);
+      RunningTask=1;
+    }
     if(RunningTask==1){
-      
+      MotorSetOutput(&fric1, speedMode, -5600);
+      MotorSetOutput(&fric2, speedMode, -5600);
+      MotorSetOutput(&fric3, speedMode, 5600);
+      MotorSetOutput(&fric4, speedMode, 5600);
       MotorRunSpeedTimeBlocking(&lift,30000,3500);
       osDelay(1000);
       MotorSetOutput(&fric1, speedMode, 100);
@@ -1082,6 +1094,8 @@ void StartTask2(void const * argument)
       MotorSetOutput(&fric4, speedMode, -100);
       MotorRunSpeedTimeBlocking(&lift,-30000,2500);
       MotorRunToStall(&lift,-6000);
+      MotorRunSpeedTimeBlocking(&lift,3000,500);
+      osDelay(1000);
       RunningTask=0;
     }
     if(RunningTask==2){
