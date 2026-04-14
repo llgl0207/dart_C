@@ -94,6 +94,7 @@ typedef struct{
 /* USER CODE BEGIN PD */
   #define MOTOR_SEND_NUM 3
   #define MOTOR_NUM 7
+  #define DEFAULT_RING_ARR 4999 // 默认蜂鸣器ARR值
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -253,6 +254,7 @@ int main(void)
 
   HAL_Delay(3000);
   HAL_GPIO_WritePin(LED_B_GPIO_Port, LED_B_Pin, GPIO_PIN_SET);
+  __HAL_TIM_SET_AUTORELOAD(&htim4, DEFAULT_RING_ARR);
   /* USER CODE END 2 */
 
   /* Call init function for freertos objects (in cmsis_os2.c) */
@@ -971,7 +973,7 @@ void MotorUpdate(void const * argument)
         buzzer_oneshot--;
         if (buzzer_oneshot == 0) {
             // 结束短响，恢复默认 1KHz (ARR = 9999)
-            __HAL_TIM_SET_AUTORELOAD(&htim4, 9999);
+            __HAL_TIM_SET_AUTORELOAD(&htim4, DEFAULT_RING_ARR);
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 暂歇
         }
     }
