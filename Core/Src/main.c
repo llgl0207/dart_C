@@ -970,8 +970,8 @@ void MotorUpdate(void const * argument)
         // 短响期间保持当前频率输出
         buzzer_oneshot--;
         if (buzzer_oneshot == 0) {
-            // 结束短响，恢复默认 1KHz (ARR = 999)
-            __HAL_TIM_SET_AUTORELOAD(&htim4, 999);
+            // 结束短响，恢复默认 1KHz (ARR = 9999)
+            __HAL_TIM_SET_AUTORELOAD(&htim4, 9999);
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0); // 暂歇
         }
     }
@@ -1151,7 +1151,7 @@ void StartTask2(void const * argument)
         MotorRunToAngleBlocking(&GM6020,10000,600);
       }
  */
-      osDelay(10000);
+      osDelay(20000);
       MotorRunSpeedTimeBlocking(&lift,30000,4000);
       osDelay(1000);
       MotorSetOutput(&fric1, speedMode, 100);

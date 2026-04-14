@@ -124,6 +124,8 @@ targets:
         - RTE/_dart_C
       libList: []
     excludeList: []
+    settings:
+      debugger: cortex-debug
     toolchain: AC5
     toolchainConfigMap:
       AC5:
