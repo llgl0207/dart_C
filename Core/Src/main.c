@@ -76,6 +76,7 @@ typedef struct{
   uint32_t lastRxTick; // 最近一次收到CAN反馈的时间戳
   uint8_t isOnline; // CAN反馈在线状态
   uint32_t onlineSinceTick; // 最近一次上线时间戳，用于上电后保护判定延时
+  uint8_t newDataFlag; // 新数据标志位
 }MotorState;//存储电机状态的结构体
 
 typedef struct{
@@ -114,6 +115,28 @@ typedef struct{
   #define BUZZER_ALERT_FREQ_HZ 1450U // 日常报警蜂鸣器频率，避免与电调告警音相近
   #define MOTOR_OFFLINE_TIMEOUT_MS 100U // 超过该时间未收到反馈则判定离线
   #define MOTOR_ONLINE_WARMUP_MS 800U // 电机重新上电后的保护判定预热时间
+
+  // 全自动模式（RunningTask=6）预设发射参数（4发）
+  #define DART_AUTO_YAW_0   245000
+  #define DART_AUTO_V1_0    4000
+  #define DART_AUTO_V2_0    4000
+  #define DART_AUTO_YAW_1   245000
+  #define DART_AUTO_V1_1    4000
+  #define DART_AUTO_V2_1    4000
+  #define DART_AUTO_YAW_2   245000
+  #define DART_AUTO_V1_2    4000
+  #define DART_AUTO_V2_2    4000
+  #define DART_AUTO_YAW_3   245000
+  #define DART_AUTO_V1_3    4000
+  #define DART_AUTO_V2_3    4000
+
+  // 半自动模式（RunningTask=7）第一发预设参数
+  #define DART_SEMI_FIRST_YAW   245000
+  #define DART_SEMI_FIRST_V1    4000
+  #define DART_SEMI_FIRST_V2    4000
+
+  // 比赛模式选择：0=关闭（默认手动CDC控制），6=全自动，7=半自动
+  #define DART_COMPETITION_MODE 0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -130,11 +153,13 @@ void MotorSetOutput(Motor *motor, enum MotorMode mode, double value);//设置输
 void MotorRunToAngleBlocking(Motor *motor, double angle, double speed);//以指定角度运行电机
 void MotorRunSpeedTime(Motor *motor, double speed, uint32_t time);//以指定速度运行指定时间
 void MotorRunSpeedTimeBlocking(Motor *motor, double speed, uint32_t time);//以指定速度运行指定时间(阻塞)
+void MotorRunToSetTemp(Motor *motor, double targetTemp, double warmSpeed, double holdSpeed);//摩擦轮预热控温
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);//发送CAN消息
 void TransferToMotorSend(Motor *motor);//根据电机的StdId来决定发送到哪个MotorSend结构体中
 void CanSendMotor(MotorSend *motorsend);//发送对应的MotorSend结构体
 void MotorCdcFeedback(uint8_t motor_SN);//发送motor_array对应序号电机的反馈信息到CDC
 void RefereeCdcFeedback(void);//发送裁判系统缓存数据到CDC
+void DartFireSingle(double yaw, double v1Speed, double v2Speed);//单发飞镖（阻塞）
 
 void Singing();//整活
 void SingingSome();//唱一小段
@@ -395,6 +420,7 @@ void RecReceiveMotor(Motor *motor,uint8_t *data){//接收对应的电机数据
   }
   motor->motorState.lastRxTick = HAL_GetTick();
   motor->motorState.isOnline = 1;
+  motor->motorState.newDataFlag = 1; // 标记收到新数据
   int deltaAngle = (int)(((uint16_t)data[0]<<8)|data[1])-(int)motor->motorState.singleAngle;//角度增量
   motor->motorState.singleAngle = ((uint16_t)data[0]<<8)|data[1];//记录当前角度
   if(abs(deltaAngle) < 4096) motor->motorState.angle += deltaAngle;
@@ -408,6 +434,12 @@ void MotorFilterUpdate(Motor *motor)//将滤波值更新到电机中
   if (motor == NULL) {
     return;
   }
+
+  // 只有收到新数据才更新滤波，避免定时器与CAN接收异步导致差拍干扰
+  if (motor->motorState.newDataFlag == 0) {
+    return;
+  }
+  motor->motorState.newDataFlag = 0;
 
   use_filter = (motor == &fric1) || (motor == &fric2) || (motor == &fric3) || (motor == &fric4) || (motor == &lift);
   if (!use_filter) {
@@ -548,11 +580,36 @@ void PidInit(Pid *pid,double Kp,double Ki,double Kd,double maxOutput,double dead
 }
 
 void dartParamInit(){
-  for(int i=0;i<4;i++){
-    dartParam_array[i].yaw = 245000;
-    dartParam_array[i].v1Speed = 0;
-    dartParam_array[i].v2Speed = 0;
-  }
+  dartParam_array[0].yaw   = DART_AUTO_YAW_0;
+  dartParam_array[0].v1Speed = DART_AUTO_V1_0;
+  dartParam_array[0].v2Speed = DART_AUTO_V2_0;
+  dartParam_array[1].yaw   = DART_AUTO_YAW_1;
+  dartParam_array[1].v1Speed = DART_AUTO_V1_1;
+  dartParam_array[1].v2Speed = DART_AUTO_V2_1;
+  dartParam_array[2].yaw   = DART_AUTO_YAW_2;
+  dartParam_array[2].v1Speed = DART_AUTO_V1_2;
+  dartParam_array[2].v2Speed = DART_AUTO_V2_2;
+  dartParam_array[3].yaw   = DART_AUTO_YAW_3;
+  dartParam_array[3].v1Speed = DART_AUTO_V1_3;
+  dartParam_array[3].v2Speed = DART_AUTO_V2_3;
+}
+
+// 单发飞镖（阻塞）：yaw=角度(0~490000), v1Speed/v2Speed=摩擦轮转速
+void DartFireSingle(double yaw, double v1Speed, double v2Speed){
+  MotorRunToAngleBlocking(&GM6020, yaw, 300);
+  MotorSetOutput(&fric1, speedMode, -v1Speed);
+  MotorSetOutput(&fric2, speedMode, -v2Speed);
+  MotorSetOutput(&fric3, speedMode, v1Speed);
+  MotorSetOutput(&fric4, speedMode, v2Speed);
+  MotorRunToStall(&load, -3000);
+  MotorRunSpeedTimeBlocking(&lift, 30000, 3700);
+  MotorSetOutput(&fric1, speedMode, 0);
+  MotorSetOutput(&fric2, speedMode, 0);
+  MotorSetOutput(&fric3, speedMode, 0);
+  MotorSetOutput(&fric4, speedMode, 0);
+  MotorRunSpeedTimeBlocking(&lift, -30000, 3000);
+  MotorRunToStall(&lift, -6000);
+  MotorRunToStall(&load, -3000);
 }
 
 
@@ -654,6 +711,37 @@ void MotorRunSpeedTimeBlocking(Motor *motor, double speed, uint32_t time){
   }
 };
 
+//摩擦轮预热控温：以 warmSpeed 升温至 targetTemp，之后用 holdSpeed 维持
+//当 RunningTask 不再是 5 时退出并停止摩擦轮，允许发射任务接管
+void MotorRunToSetTemp(Motor *motor, double targetTemp, double warmSpeed, double holdSpeed){
+  // 先以 warmSpeed 快速升温
+  MotorSetOutput(motor, speedMode, warmSpeed);
+  while(motor->motorState.tempr < targetTemp){
+    if(RunningTask != 5) goto exit;
+    osDelay(10);
+  }
+  // 达到目标温度后进入恒温循环
+  while(1){
+    if(RunningTask != 5) goto exit;
+    if(motor->motorState.tempr > targetTemp + 1){
+      MotorSetOutput(motor, speedMode, 0);
+      while(motor->motorState.tempr > targetTemp){
+        if(RunningTask != 5) goto exit;
+        osDelay(10);
+      }
+      MotorSetOutput(motor, speedMode, holdSpeed);
+    } else if(motor->motorState.tempr < targetTemp - 1){
+      MotorSetOutput(motor, speedMode, warmSpeed);
+    } else {
+      MotorSetOutput(motor, speedMode, holdSpeed);
+    }
+    osDelay(10);
+  }
+exit:
+  MotorSetOutput(motor, speedMode, 0);
+  return;
+};
+
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -711,7 +799,7 @@ void MotorCdcFeedback(uint8_t motor_SN){
 
 void RefereeCdcFeedback(void){
   static uint8_t seq = 0;
-  uint8_t feedback[21];
+  uint8_t feedback[45];
   referee_status_t status = Referee_GetStatus(&g_referee);
   uint8_t has_flags = 0;
 
@@ -720,6 +808,15 @@ void RefereeCdcFeedback(void){
   }
   if (g_referee.dart.has_dart_client_cmd != 0U) {
     has_flags |= 0x02U;
+  }
+  if (g_referee.robot.has_robot_status != 0U) {
+    has_flags |= 0x04U;
+  }
+  if (g_referee.robot.has_robot_hp != 0U) {
+    has_flags |= 0x08U;
+  }
+  if (g_referee.dart.has_dart_param != 0U) {
+    has_flags |= 0x10U;
   }
 
   feedback[0] = 0x82;
@@ -743,8 +840,30 @@ void RefereeCdcFeedback(void){
   feedback[18] = (uint8_t)(g_referee.runtime.parse_err_count >> 16);
   feedback[19] = (uint8_t)(g_referee.runtime.parse_err_count >> 8);
   feedback[20] = (uint8_t)(g_referee.runtime.parse_err_count & 0xFF);
-
-  CDC_Transmit_FS(feedback, 21);
+  feedback[21] = g_referee.robot.robot_status.robot_id;
+  feedback[22] = g_referee.robot.robot_status.robot_level;
+  feedback[23] = (uint8_t)(g_referee.robot.robot_status.remain_HP >> 8);
+  feedback[24] = (uint8_t)(g_referee.robot.robot_status.remain_HP & 0xFF);
+  feedback[25] = (uint8_t)(g_referee.robot.robot_status.max_HP >> 8);
+  feedback[26] = (uint8_t)(g_referee.robot.robot_status.max_HP & 0xFF);
+  feedback[27] = (uint8_t)(g_referee.robot.robot_hp.ally_1_robot_HP >> 8);
+  feedback[28] = (uint8_t)(g_referee.robot.robot_hp.ally_1_robot_HP & 0xFF);
+  feedback[29] = (uint8_t)(g_referee.robot.robot_hp.ally_outpost_HP >> 8);
+  feedback[30] = (uint8_t)(g_referee.robot.robot_hp.ally_outpost_HP & 0xFF);
+  feedback[31] = (uint8_t)(g_referee.robot.robot_hp.ally_base_HP >> 8);
+  feedback[32] = (uint8_t)(g_referee.robot.robot_hp.ally_base_HP & 0xFF);
+  // 0x0301 飞镖参数（非消费式读取，不干扰 RunningTask=7 消费）
+  feedback[33] = g_referee.dart.has_dart_param;
+  feedback[34] = g_referee.dart.dart_param_item.dart_id;
+  feedback[35] = (uint8_t)(g_referee.dart.dart_param_item.v1Speed >> 8);
+  feedback[36] = (uint8_t)(g_referee.dart.dart_param_item.v1Speed & 0xFF);
+  feedback[37] = (uint8_t)(g_referee.dart.dart_param_item.v2Speed >> 8);
+  feedback[38] = (uint8_t)(g_referee.dart.dart_param_item.v2Speed & 0xFF);
+  feedback[39] = (uint8_t)(g_referee.dart.dart_param_item.yaw >> 24);
+  feedback[40] = (uint8_t)(g_referee.dart.dart_param_item.yaw >> 16);
+  feedback[41] = (uint8_t)(g_referee.dart.dart_param_item.yaw >> 8);
+  feedback[42] = (uint8_t)(g_referee.dart.dart_param_item.yaw & 0xFF);
+  CDC_Transmit_FS(feedback, 43);
 }
 
 void CDC_Receive_Callback(uint8_t *Buf, uint32_t Len)
@@ -1267,7 +1386,7 @@ void StartTask2(void const * argument)
   PidInit(&GM6020.speedPid, 12, 1, 0.0, 4000.0, 0.0, 1000);
   for(int i=0;i<4;i++){
     MotorSafetyInit(motor_array[i], 55, 35000, 500, 50, 100);
-    PidInit(&motor_array[i]->speedPid, 60, 1, 1, 30000.0, 0.0, 30000);
+    PidInit(&motor_array[i]->speedPid, 60, 1, 1, 15000.0, 0.0, 15000);
   }
   PidInit(&fric1.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
   PidInit(&fric2.anglePid, 1, 1, 1000, 3000.0, 0.0, 1000);
@@ -1327,14 +1446,17 @@ void StartTask2(void const * argument)
   MotorSetOutput(&fric3, speedMode, 4000);
   MotorSetOutput(&fric4, speedMode, 4000);
   osDelay(1000);
-  MotorSetOutput(&fric1, speedMode, 100);
-  MotorSetOutput(&fric2, speedMode, 100);
-  MotorSetOutput(&fric3, speedMode, -100);
-  MotorSetOutput(&fric4, speedMode, -100);
+  MotorSetOutput(&fric1, speedMode, 0);
+  MotorSetOutput(&fric2, speedMode, 0);
+  MotorSetOutput(&fric3, speedMode, 0);
+  MotorSetOutput(&fric4, speedMode, 0);
   HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LED_G_GPIO_Port, LED_G_Pin, GPIO_PIN_SET); // 指示准备完成
   alarm_level=0;
   CDC_Ctrl_state = 1; // CDC 连接完成，允许接收控制命令
+#if DART_COMPETITION_MODE != 0
+  RunningTask = DART_COMPETITION_MODE; // 比赛模式下自动启动
+#endif
   ////////////////////////////////////////////////////////////////////////////  
   /* Infinite loop */
   for(;;)
@@ -1344,37 +1466,43 @@ void StartTask2(void const * argument)
       RunningTask=1;
     } */
     if(RunningTask==1){
-      //MotorSetOutput(&fric1, speedMode, -5600);
-      //MotorSetOutput(&fric2, speedMode, -5600);
-      //MotorSetOutput(&fric3, speedMode, 5600);
-      //MotorSetOutput(&fric4, speedMode, 5600);
-      MotorRunSpeedTimeBlocking(&lift,30000,4000);
-      osDelay(1000);
-      MotorSetOutput(&fric1, speedMode, 100);
-      MotorSetOutput(&fric2, speedMode, 100);
-      MotorSetOutput(&fric3, speedMode, -100);
-      MotorSetOutput(&fric4, speedMode, -100);
-      MotorRunSpeedTimeBlocking(&lift,-30000,2500);
-      MotorRunToStall(&lift,-6000);
-      MotorRunSpeedTimeBlocking(&lift,3000,500);
-      osDelay(1000);
-      RunningTask=0;
-    }
-    if(RunningTask==2){//现在用来测试滤波准确性
-      /* while(RunningTask==2){
-        MotorRunToAngleBlocking(&GM6020,400000,600);
-        MotorRunToAngleBlocking(&GM6020,10000,600);
-      }
- */
-      MotorRunSpeedTimeBlocking(&lift,3000,25000);
-      osDelay(1000);
+      // 单发程序 - 立即执行，使用 dartParam_array[0] 的参数
+      // 先转云台到位，再启动摩擦轮，保证精度同时减少摩擦轮运行时间
+      MotorRunToAngleBlocking(&GM6020,dartParam_array[0].yaw,300);
+      MotorSetOutput(&fric1, speedMode, -dartParam_array[0].v1Speed);
+      MotorSetOutput(&fric2, speedMode, -dartParam_array[0].v2Speed);
+      MotorSetOutput(&fric3, speedMode, dartParam_array[0].v1Speed);
+      MotorSetOutput(&fric4, speedMode, dartParam_array[0].v2Speed);
+      MotorRunToStall(&load,-3000);
+      MotorRunSpeedTimeBlocking(&lift,30000,3700);
       MotorSetOutput(&fric1, speedMode, 0);
       MotorSetOutput(&fric2, speedMode, 0);
-      MotorSetOutput(&fric3, speedMode, -0);
-      MotorSetOutput(&fric4, speedMode, -0);  
-      MotorRunToStall(&lift,-8000);
-      //在此处写程序
-      RunningTask=2;
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
+      MotorRunSpeedTimeBlocking(&lift,-30000,3000);
+      MotorRunToStall(&lift,-6000);
+      MotorRunToStall(&load,-3000);
+      RunningTask=0;
+    }
+    if(RunningTask==2){
+      // 单发程序 - 延迟10秒后执行，使用 dartParam_array[0] 的参数
+      osDelay(10000);
+      // 先转云台到位，再启动摩擦轮，保证精度同时减少摩擦轮运行时间
+      MotorRunToAngleBlocking(&GM6020,dartParam_array[0].yaw,300);
+      MotorSetOutput(&fric1, speedMode, -dartParam_array[0].v1Speed);
+      MotorSetOutput(&fric2, speedMode, -dartParam_array[0].v2Speed);
+      MotorSetOutput(&fric3, speedMode, dartParam_array[0].v1Speed);
+      MotorSetOutput(&fric4, speedMode, dartParam_array[0].v2Speed);
+      MotorRunToStall(&load,-3000);
+      MotorRunSpeedTimeBlocking(&lift,30000,2000);
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
+      MotorRunSpeedTimeBlocking(&lift,-30000,3000);
+      MotorRunToStall(&lift,-6000);
+      MotorRunToStall(&load,-3000);
+      RunningTask=0;
     }
     if(RunningTask==3){
       //在此处写程序
@@ -1384,47 +1512,145 @@ void StartTask2(void const * argument)
     if(RunningTask==4){
       //在此处写程序
       //连发程序
+      // 先转云台到位，再启动摩擦轮，保证精度同时减少摩擦轮运行时间
+      MotorRunToAngleBlocking(&GM6020,dartParam_array[0].yaw,300);
       MotorSetOutput(&fric1, speedMode, -dartParam_array[0].v1Speed);
       MotorSetOutput(&fric2, speedMode, -dartParam_array[0].v2Speed);
       MotorSetOutput(&fric3, speedMode, dartParam_array[0].v1Speed);
       MotorSetOutput(&fric4, speedMode, dartParam_array[0].v2Speed);
-      MotorRunToAngleBlocking(&GM6020,dartParam_array[0].yaw,300);
       MotorRunToStall(&load,-3000);
       MotorRunSpeedTimeBlocking(&lift,30000,2000);
+      MotorRunToAngleBlocking(&GM6020,dartParam_array[1].yaw,300);
       MotorSetOutput(&fric1, speedMode, -dartParam_array[1].v1Speed);
       MotorSetOutput(&fric2, speedMode, -dartParam_array[1].v2Speed);
       MotorSetOutput(&fric3, speedMode, dartParam_array[1].v1Speed);
       MotorSetOutput(&fric4, speedMode, dartParam_array[1].v2Speed);
-      MotorRunToAngleBlocking(&GM6020,dartParam_array[1].yaw,300);
       MotorRunSpeedTimeBlocking(&lift,30000,1700);
-      MotorSetOutput(&fric1, speedMode, 100);
-      MotorSetOutput(&fric2, speedMode, 100);
-      MotorSetOutput(&fric3, speedMode, -100);
-      MotorSetOutput(&fric4, speedMode, -100);
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
       MotorRunSpeedTimeBlocking(&lift,-30000,3000);
       MotorRunToStall(&lift,-6000);
 
+      MotorRunToAngleBlocking(&GM6020,dartParam_array[2].yaw,300);
       MotorSetOutput(&fric1, speedMode, -dartParam_array[2].v1Speed);
       MotorSetOutput(&fric2, speedMode, -dartParam_array[2].v2Speed);
       MotorSetOutput(&fric3, speedMode, dartParam_array[2].v1Speed);
       MotorSetOutput(&fric4, speedMode, dartParam_array[2].v2Speed);
-      MotorRunToAngleBlocking(&GM6020,dartParam_array[2].yaw,300);
       MotorRunToStall(&load,3000);
       MotorRunSpeedTimeBlocking(&lift,30000,2000);
+      MotorRunToAngleBlocking(&GM6020,dartParam_array[3].yaw,300);
       MotorSetOutput(&fric1, speedMode, -dartParam_array[3].v1Speed);
       MotorSetOutput(&fric2, speedMode, -dartParam_array[3].v2Speed);
       MotorSetOutput(&fric3, speedMode, dartParam_array[3].v1Speed);
       MotorSetOutput(&fric4, speedMode, dartParam_array[3].v2Speed);
-      MotorRunToAngleBlocking(&GM6020,dartParam_array[3].yaw,300);
       MotorRunSpeedTimeBlocking(&lift,30000,1700);
-      MotorSetOutput(&fric1, speedMode, 100);
-      MotorSetOutput(&fric2, speedMode, 100);
-      MotorSetOutput(&fric3, speedMode, -100);
-      MotorSetOutput(&fric4, speedMode, -100);
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
       MotorRunSpeedTimeBlocking(&lift,-30000,3000);
       MotorRunToStall(&lift,-6000);
       MotorRunToStall(&load,-3000);
       
+      RunningTask=0;
+    }
+    if(RunningTask==5){
+      // 摩擦轮预热控温：同时控制所有4个摩擦轮
+      // 以平均温度判断：低于目标升温，高于目标暂停
+      // 退出后不清空 RunningTask，让主循环处理新设的任务值
+      double targetTemp = 50;
+      double warmSpeed = 1000;
+      double holdSpeed = 600;
+      
+      // 先全速升温
+      MotorSetOutput(&fric1, speedMode, -warmSpeed);
+      MotorSetOutput(&fric2, speedMode, -warmSpeed);
+      MotorSetOutput(&fric3, speedMode, warmSpeed);
+      MotorSetOutput(&fric4, speedMode, warmSpeed);
+      
+      while(RunningTask == 5){
+        // 取4个摩擦轮的平均温度作为判断依据
+        double avgTemp = (fric1.motorState.tempr + fric2.motorState.tempr +
+                         fric3.motorState.tempr + fric4.motorState.tempr) / 4.0;
+        
+        if(avgTemp > targetTemp + 1){
+          // 温度过高，停止
+          MotorSetOutput(&fric1, speedMode, 0);
+          MotorSetOutput(&fric2, speedMode, 0);
+          MotorSetOutput(&fric3, speedMode, 0);
+          MotorSetOutput(&fric4, speedMode, 0);
+        } else if(avgTemp < targetTemp - 1){
+          // 温度偏低，升温
+          MotorSetOutput(&fric1, speedMode, -warmSpeed);
+          MotorSetOutput(&fric2, speedMode, -warmSpeed);
+          MotorSetOutput(&fric3, speedMode, warmSpeed);
+          MotorSetOutput(&fric4, speedMode, warmSpeed);
+        } else {
+          // 达到目标温度，保持
+          MotorSetOutput(&fric1, speedMode, -holdSpeed);
+          MotorSetOutput(&fric2, speedMode, -holdSpeed);
+          MotorSetOutput(&fric3, speedMode, holdSpeed);
+          MotorSetOutput(&fric4, speedMode, holdSpeed);
+        }
+        osDelay(10);
+      }
+      // 退出控温，摩擦轮归零
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
+    }
+    if(RunningTask==6){
+      // 全自动模式：使用宏定义预设参数连发4发，无需裁判系统数据
+      // 先等待裁判系统开门（dart_launch_opening_status == 0）
+      while(1){
+        (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
+        if(g_dart_cmd_cache.dart_launch_opening_status == 0) break;
+        osDelay(10);
+      }
+      // 第1发
+      DartFireSingle(DART_AUTO_YAW_0, DART_AUTO_V1_0, DART_AUTO_V2_0);
+      // 第2发
+      DartFireSingle(DART_AUTO_YAW_1, DART_AUTO_V1_1, DART_AUTO_V2_1);
+      // 第3发
+      DartFireSingle(DART_AUTO_YAW_2, DART_AUTO_V1_2, DART_AUTO_V2_2);
+      // 第4发
+      DartFireSingle(DART_AUTO_YAW_3, DART_AUTO_V1_3, DART_AUTO_V2_3);
+      RunningTask=0;
+    }
+    if(RunningTask==7){
+      // 半自动模式：第1发使用预设参数，后续等待裁判系统0x0301数据
+      // 等待开门信号
+      while(1){
+        (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
+        if(g_dart_cmd_cache.dart_launch_opening_status == 0) break;
+        osDelay(10);
+      }
+      // 第1发：使用半自动预设参数
+      DartFireSingle(DART_SEMI_FIRST_YAW, DART_SEMI_FIRST_V1, DART_SEMI_FIRST_V2);
+      // 第2~4发：等待裁判系统通过0x0301下发参数，每收到一发立即打出
+      for(int shot = 1; shot < 4; ){
+        referee_dart_param_item_t param;
+        int ret = Referee_GetDartParam(&g_referee, &param);
+        if(ret == 0){
+          // 收到有效参数，更新dartParam_array并发射
+          uint8_t id = param.dart_id;
+          if(id > 3) id = 0; // 防越界
+          dartParam_array[id].yaw     = param.yaw;
+          dartParam_array[id].v1Speed = param.v1Speed;
+          dartParam_array[id].v2Speed = param.v2Speed;
+          DartFireSingle(dartParam_array[id].yaw,
+                         dartParam_array[id].v1Speed,
+                         dartParam_array[id].v2Speed);
+          shot++;
+        }
+        // 检查是否中途被切走
+        if(RunningTask != 7) goto exit_task7;
+        osDelay(5);
+      }
+      exit_task7:
       RunningTask=0;
     }
     //alarm_level = 2; // 测试报警

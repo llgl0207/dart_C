@@ -14,7 +14,7 @@ MOTOR_NUM = 7
 MOTOR_FRAME_HEADER = 0x81
 REFEREE_FRAME_HEADER = 0x82
 MOTOR_FRAME_LEN = 14
-REFEREE_FRAME_LEN = 21
+REFEREE_FRAME_LEN = 33
 
 
 class MotorMode(IntEnum):
@@ -49,6 +49,11 @@ class MotorControlApp:
         self.yaw_angle_var = tk.DoubleVar(value=0) # Slide range -245000 to 245000
         self.log_text = None
         
+        # Single Shot variables (for Tasks 1 & 2)
+        self.single_v1 = tk.IntVar(value=4000)
+        self.single_v2 = tk.IntVar(value=4000)
+        self.single_yaw = tk.DoubleVar(value=0.0)
+        
         # 电机状态数据存储
         # motor_data[id] = { 'angle': int, 'rpm': int, 'torque': int, 'temp': int, 'enabled': bool, 'stalled': bool, 'mode': int, 'total_angle': int }
         self.motor_data = [
@@ -65,9 +70,6 @@ class MotorControlApp:
             'target_change_time': 0,
             'latest_launch_cmd_time': 0,
             'seq': 0,
-            'has_flags': 0,
-            'parse_ok_count': 0,
-            'parse_err_count': 0,
         }
         
         # 模式映射
@@ -172,9 +174,6 @@ class MotorControlApp:
             ("TargetChangeTime", 'target_change_time'),
             ("LatestLaunchCmd", 'latest_launch_cmd_time'),
             ("Seq", 'seq'),
-            ("HasFlags", 'has_flags'),
-            ("ParseOK", 'parse_ok_count'),
-            ("ParseErr", 'parse_err_count'),
         ]
 
         for row, (title, key) in enumerate(fields):
@@ -204,9 +203,10 @@ class MotorControlApp:
             if not self.connected or not self.ser:
                 return
 
-            packet = struct.pack('>BBBdh h', 0x02, 0x00, dart_id, yaw, v1, v2)
-            
-            self.ser.write(packet)
+            # Split pack to avoid double alignment padding
+            header = struct.pack('BBB', 0x02, 0x00, dart_id)
+            params = struct.pack('>dhh', yaw, v1, v2)
+            self.ser.write(header + params)
             self.log(f"Set Dart {dart_id}: Yaw={yaw}, V1={v1}, V2={v2}", "blue")
             
         except ValueError:
@@ -369,7 +369,7 @@ class MotorControlApp:
         # Style the stop button red if possible, or just text
         
         ttk.Label(frame_sys, text="Set Task:").pack(side="left", padx=5)
-        self.run_task_var = tk.IntVar(value=1)
+        self.run_task_var = tk.IntVar(value=4)
         ttk.Entry(frame_sys, textvariable=self.run_task_var, width=5).pack(side="left", padx=2)
         ttk.Button(frame_sys, text="Set RunningTask", command=self.action_set_task).pack(side="left", padx=5)
 
@@ -377,13 +377,25 @@ class MotorControlApp:
         frame_actions = ttk.LabelFrame(parent, text="Quick Actions")
         frame_actions.pack(fill="x", padx=10, pady=5)
         
-        # Dart Launch Controls
-        # Row 1: Friction Control
+        # === Single Shot (Tasks 1 & 2) ===
+        frame_single = ttk.LabelFrame(frame_actions, text="Single Shot (Tasks 1 & 2 - uses Dart 0 params)")
+        frame_single.pack(fill="x", padx=5, pady=2)
+        
+        ttk.Label(frame_single, text="Speed1:").pack(side="left", padx=2)
+        ttk.Entry(frame_single, textvariable=self.single_v1, width=6).pack(side="left", padx=2)
+        ttk.Label(frame_single, text="Speed2:").pack(side="left", padx=2)
+        ttk.Entry(frame_single, textvariable=self.single_v2, width=6).pack(side="left", padx=2)
+        ttk.Label(frame_single, text="Yaw:").pack(side="left", padx=2)
+        ttk.Entry(frame_single, textvariable=self.single_yaw, width=8).pack(side="left", padx=2)
+        
+        ttk.Button(frame_single, text="Launch NOW (Task 1)", command=self.action_single_launch_now).pack(side="left", padx=3)
+        ttk.Button(frame_single, text="Launch +10s (Task 2)", command=self.action_single_launch_delayed).pack(side="left", padx=3)
+
+        # === Friction & Multi-Launch ===
         frame_launch_1 = ttk.Frame(frame_actions)
         frame_launch_1.pack(fill="x", padx=5, pady=2)
         ttk.Label(frame_launch_1, text="Friction Control:").pack(side="left")
         
-        # Friction Speed Input
         ttk.Label(frame_launch_1, text="Speed 1:").pack(side="left", padx=2)
         ttk.Entry(frame_launch_1, textvariable=self.friction_speed_var, width=6).pack(side="left", padx=2)
 
@@ -393,14 +405,13 @@ class MotorControlApp:
         ttk.Button(frame_launch_1, text="Prepare Launch (Friction ON)", command=self.action_prepare_launch).pack(side="left", padx=5)
         ttk.Button(frame_launch_1, text="Stop Friction (OFF)", command=self.action_stop_friction).pack(side="left", padx=5)
 
-        # Row 2: Feed & Launch
-        frame_launch_2 = ttk.Frame(frame_actions)
-        frame_launch_2.pack(fill="x", padx=5, pady=2)
-        ttk.Label(frame_launch_2, text="Launch Actions:").pack(side="left")
-        ttk.Button(frame_launch_2, text="Feed (In)", command=self.action_feed_in).pack(side="left", padx=5)
-        ttk.Button(frame_launch_2, text="Feed (Out)", command=self.action_feed_out).pack(side="left", padx=5)
-        
-        ttk.Button(frame_launch_2, text="ONE CLICK LAUNCH", command=self.action_one_click_launch).pack(side="left", padx=5)
+        # Row: ONE CLICK LAUNCH (Task 4 - continuous launch)
+        frame_launch_4 = ttk.Frame(frame_actions)
+        frame_launch_4.pack(fill="x", padx=5, pady=2)
+        ttk.Label(frame_launch_4, text="Continuous Launch:").pack(side="left")
+        ttk.Button(frame_launch_4, text="Feed (In)", command=self.action_feed_in).pack(side="left", padx=5)
+        ttk.Button(frame_launch_4, text="Feed (Out)", command=self.action_feed_out).pack(side="left", padx=5)
+        ttk.Button(frame_launch_4, text="ONE CLICK CONTINUOUS (Task 4)", command=self.action_one_click_launch).pack(side="left", padx=5)
 
         # Loading Mechanism (Lift - ID 6)
         frame_load = ttk.Frame(frame_actions)
@@ -596,7 +607,7 @@ class MotorControlApp:
 
     def parse_referee_feedback(self, packet):
         try:
-            if len(packet) != REFEREE_FRAME_LEN:
+            if len(packet) < 12:
                 return
 
             status = packet[1]
@@ -606,9 +617,6 @@ class MotorControlApp:
             target_change_time = (packet[7] << 8) | packet[8]
             latest_launch_cmd_time = (packet[9] << 8) | packet[10]
             seq = packet[11]
-            has_flags = packet[12]
-            parse_ok_count = (packet[13] << 24) | (packet[14] << 16) | (packet[15] << 8) | packet[16]
-            parse_err_count = (packet[17] << 24) | (packet[18] << 16) | (packet[19] << 8) | packet[20]
 
             with self.lock:
                 self.referee_data.update({
@@ -619,9 +627,6 @@ class MotorControlApp:
                     'target_change_time': target_change_time,
                     'latest_launch_cmd_time': latest_launch_cmd_time,
                     'seq': seq,
-                    'has_flags': has_flags,
-                    'parse_ok_count': parse_ok_count,
-                    'parse_err_count': parse_err_count,
                 })
 
         except Exception as e:
@@ -676,9 +681,6 @@ class MotorControlApp:
                 self.referee_labels['target_change_time'].config(text=str(self.referee_data['target_change_time']))
                 self.referee_labels['latest_launch_cmd_time'].config(text=str(self.referee_data['latest_launch_cmd_time']))
                 self.referee_labels['seq'].config(text=str(self.referee_data['seq']))
-                self.referee_labels['has_flags'].config(text=f"0x{self.referee_data['has_flags']:02X}")
-                self.referee_labels['parse_ok_count'].config(text=str(self.referee_data['parse_ok_count']))
-                self.referee_labels['parse_err_count'].config(text=str(self.referee_data['parse_err_count']))
 
         # 循环调用自己
         self.root.after(100, self.update_monitor_ui)
@@ -781,17 +783,72 @@ class MotorControlApp:
             self.send_raw_packet(mid, 3, data_zero) # Mode 3 (Speed) -> 0
             time.sleep(0.01)
 
+    def action_single_launch_now(self):
+        # Single shot: set dartParam_array[0] params, then trigger Task 1
+        try:
+            if not self.connected or not self.ser:
+                self.log("Not connected", "red")
+                return
+            v1 = int(self.single_v1.get())
+            v2 = int(self.single_v2.get())
+            yaw = float(self.single_yaw.get())
+            v1 = max(-32768, min(32767, v1))
+            v2 = max(-32768, min(32767, v2))
+            
+            # Write to dartParam_array[0] via protocol 0x02
+            # Use separate pack to avoid double alignment padding
+            header = struct.pack('BBB', 0x02, 0x00, 0)
+            params = struct.pack('>dhh', yaw, v1, v2)
+            self.ser.write(header + params)
+            time.sleep(0.02)
+            
+            # Trigger Task 1 (launch now)
+            packet = struct.pack('BB', 0x01, 0x01)
+            self.ser.write(packet)
+            self.log(f">>> Single Shot NOW: V1={v1} V2={v2} Yaw={yaw} (Task 1) <<<", "green")
+        except Exception as e:
+            self.log(f"Single Shot Error: {e}", "red")
+
+    def action_single_launch_delayed(self):
+        # Single shot: set dartParam_array[0] params, then trigger Task 2 (10s delay)
+        try:
+            if not self.connected or not self.ser:
+                self.log("Not connected", "red")
+                return
+            v1 = int(self.single_v1.get())
+            v2 = int(self.single_v2.get())
+            yaw = float(self.single_yaw.get())
+            v1 = max(-32768, min(32767, v1))
+            v2 = max(-32768, min(32767, v2))
+            
+            # Write to dartParam_array[0] via protocol 0x02
+            header = struct.pack('BBB', 0x02, 0x00, 0)
+            params = struct.pack('>dhh', yaw, v1, v2)
+            self.ser.write(header + params)
+            time.sleep(0.02)
+            
+            # Trigger Task 2 (launch after 10s)
+            packet = struct.pack('BB', 0x01, 0x02)
+            self.ser.write(packet)
+            self.log(f">>> Single Shot +10s: V1={v1} V2={v2} Yaw={yaw} (Task 2) <<<", "green")
+        except Exception as e:
+            self.log(f"Single Shot Delayed Error: {e}", "red")
+
     def action_one_click_launch(self):
-        # 1. Prepare Launch (Friction ON)
-        self.log(">>> [One-Click] Starting Launch Sequence...", "blue")
-        self.action_prepare_launch()
-        
-        # 2. Set Task (triggers launch logic on MCU)
-        # Add a small delay to ensure friction commands are processed if needed, 
-        # though send_raw_packet is synchronous.
-        time.sleep(0.05) 
-        self.action_set_task()
-        self.log(">>> [One-Click] Launch Sequence Triggered", "blue")
+        # Continuous launch: set all 4 dart params, then trigger Task 4
+        self.log(">>> [One-Click Continuous] Starting Launch Sequence...", "blue")
+        try:
+            if not self.connected or not self.ser:
+                self.log("Not connected", "red")
+                return
+            for i in range(4):
+                self.set_dart_param(i)
+                time.sleep(0.02)
+            packet = struct.pack('BB', 0x01, 0x04)
+            self.ser.write(packet)
+            self.log(">>> [One-Click Continuous] Task 4 Triggered <<<", "green")
+        except Exception as e:
+            self.log(f"One-Click Error: {e}", "red")
 
     def action_feed_in(self):
         # 0,1 are +100, 2,3 are -100
