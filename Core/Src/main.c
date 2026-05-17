@@ -117,26 +117,26 @@ typedef struct{
   #define MOTOR_ONLINE_WARMUP_MS 800U // 电机重新上电后的保护判定预热时间
 
   // 全自动模式（RunningTask=6）预设发射参数（4发）
-  #define DART_AUTO_YAW_0   245000
-  #define DART_AUTO_V1_0    4000
-  #define DART_AUTO_V2_0    4000
-  #define DART_AUTO_YAW_1   245000
-  #define DART_AUTO_V1_1    4000
-  #define DART_AUTO_V2_1    4000
-  #define DART_AUTO_YAW_2   245000
-  #define DART_AUTO_V1_2    4000
-  #define DART_AUTO_V2_2    4000
-  #define DART_AUTO_YAW_3   245000
-  #define DART_AUTO_V1_3    4000
-  #define DART_AUTO_V2_3    4000
+  #define DART_AUTO_YAW_0   -72000
+  #define DART_AUTO_V1_0    7500
+  #define DART_AUTO_V2_0    4450
+  #define DART_AUTO_YAW_1   -70100
+  #define DART_AUTO_V1_1    7200
+  #define DART_AUTO_V2_1    4450
+  #define DART_AUTO_YAW_2   -68000
+  #define DART_AUTO_V1_2    7050
+  #define DART_AUTO_V2_2    4450
+  #define DART_AUTO_YAW_3   -68000
+  #define DART_AUTO_V1_3    7050
+  #define DART_AUTO_V2_3    4450
 
   // 半自动模式（RunningTask=7）第一发预设参数
-  #define DART_SEMI_FIRST_YAW   245000
-  #define DART_SEMI_FIRST_V1    4000
-  #define DART_SEMI_FIRST_V2    4000
+  #define DART_SEMI_FIRST_YAW   -68000
+  #define DART_SEMI_FIRST_V1    7500
+  #define DART_SEMI_FIRST_V2    4450
 
   // 比赛模式选择：0=关闭（默认手动CDC控制），6=全自动，7=半自动
-  #define DART_COMPETITION_MODE 0
+  #define DART_COMPETITION_MODE 6
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -178,6 +178,8 @@ void SingingSome();//唱一小段
     uint8_t CDC_Ctrl_state = 0; // CDC使能标志
     uint8_t RunningTask = 0;// 运行任务标志
     uint8_t MotorUpdateFlag = 1; // 电机更新标志
+    uint8_t DartFireFlag = 0; // 飞镖发射标志,1表示已经发射过前两发弹丸，2表示已经发射过全部四发弹丸
+
 
     dartParam dartParam_array[4];//飞镖参数数组
 
@@ -1603,29 +1605,75 @@ void StartTask2(void const * argument)
       MotorSetOutput(&fric4, speedMode, 0);
     }
     if(RunningTask==6){
-      // 全自动模式：使用宏定义预设参数连发4发，无需裁判系统数据
-      // 先等待裁判系统开门（dart_launch_opening_status == 0）
+      // 全自动模式：按一次Y发两发，再按一次Y再发两发
+      // 第1次Y：发射第1、2发
+      uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.dart_launch_opening_status == 0) break;
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
         osDelay(10);
       }
       // 第1发
-      DartFireSingle(DART_AUTO_YAW_0, DART_AUTO_V1_0, DART_AUTO_V2_0);
+      MotorRunToAngleBlocking(&GM6020, DART_AUTO_YAW_0 + 245000.0, 300);
+      MotorSetOutput(&fric1, speedMode, -DART_AUTO_V1_0);
+      MotorSetOutput(&fric2, speedMode, -DART_AUTO_V2_0);
+      MotorSetOutput(&fric3, speedMode, DART_AUTO_V1_0);
+      MotorSetOutput(&fric4, speedMode, DART_AUTO_V2_0);
+      MotorRunToStall(&load,-3000);
+      MotorRunSpeedTimeBlocking(&lift,30000,2000);
+
+      osDelay(3000);// 等待3秒，确保弹丸发射完成
       // 第2发
-      DartFireSingle(DART_AUTO_YAW_1, DART_AUTO_V1_1, DART_AUTO_V2_1);
+      MotorRunToAngleBlocking(&GM6020, DART_AUTO_YAW_1 + 245000.0, 300);
+      MotorSetOutput(&fric1, speedMode, -DART_AUTO_V1_1);
+      MotorSetOutput(&fric2, speedMode, -DART_AUTO_V2_1);
+      MotorSetOutput(&fric3, speedMode, DART_AUTO_V1_1);
+      MotorSetOutput(&fric4, speedMode, DART_AUTO_V2_1);
+      MotorRunSpeedTimeBlocking(&lift,30000,1700);
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
+      MotorRunSpeedTimeBlocking(&lift,-30000,3000);
+      MotorRunToStall(&lift,-6000);//换弹位置
+      // 第2次Y：发射第3、4发
+      last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
+      while(1){
+        (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
+        osDelay(10);
+      }
       // 第3发
-      DartFireSingle(DART_AUTO_YAW_2, DART_AUTO_V1_2, DART_AUTO_V2_2);
+      MotorRunToAngleBlocking(&GM6020, DART_AUTO_YAW_2 + 245000.0, 300);
+      MotorSetOutput(&fric1, speedMode, -DART_AUTO_V1_2);
+      MotorSetOutput(&fric2, speedMode, -DART_AUTO_V2_2);
+      MotorSetOutput(&fric3, speedMode, DART_AUTO_V1_2);
+      MotorSetOutput(&fric4, speedMode, DART_AUTO_V2_2);
+      MotorRunToStall(&load,3000);
+      MotorRunSpeedTimeBlocking(&lift,30000,2000);
+      osDelay(3000);// 等待3秒，确保弹丸发射完成
       // 第4发
-      DartFireSingle(DART_AUTO_YAW_3, DART_AUTO_V1_3, DART_AUTO_V2_3);
+      MotorRunToAngleBlocking(&GM6020, DART_AUTO_YAW_3 + 245000.0, 300);
+      MotorSetOutput(&fric1, speedMode, -DART_AUTO_V1_3);
+      MotorSetOutput(&fric2, speedMode, -DART_AUTO_V2_3);
+      MotorSetOutput(&fric3, speedMode, DART_AUTO_V1_3);
+      MotorSetOutput(&fric4, speedMode, DART_AUTO_V2_3);
+      MotorRunSpeedTimeBlocking(&lift,30000,1700);
+      MotorSetOutput(&fric1, speedMode, 0);
+      MotorSetOutput(&fric2, speedMode, 0);
+      MotorSetOutput(&fric3, speedMode, 0);
+      MotorSetOutput(&fric4, speedMode, 0);
+      MotorRunSpeedTimeBlocking(&lift,-30000,3000);
+      MotorRunToStall(&lift,6000);//回到原来位置
       RunningTask=0;
     }
     if(RunningTask==7){
       // 半自动模式：第1发使用预设参数，后续等待裁判系统0x0301数据
-      // 等待开门信号
+      // 等待操作手按Y键（latest_launch_cmd_time变化）后发射第1发
+      uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.dart_launch_opening_status == 0) break;
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
         osDelay(10);
       }
       // 第1发：使用半自动预设参数
