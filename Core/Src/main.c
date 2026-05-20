@@ -31,8 +31,8 @@
 #include "stdlib.h"
 #include "string.h"
 #include "usbd_cdc_if.h"
-#include "Filter.h"
-#include "referee.h"
+#include "Filter.h"//滤波器头文件
+#include "referee.h"//裁判系统头文件
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,10 +62,10 @@ enum MotorMode{disable,currentMode,angleMode,speedMode,torqueMode,runToAngle,run
 
 typedef struct{
   uint16_t singleAngle;
-  double rpmRaw; 
-  double torqueRaw;
-  double rpm;
-  double torque;
+  double rpmRaw;//原始转速
+  double torqueRaw;//原始转矩
+  double rpm;//滤波后的转速
+  double torque;//滤波后的转矩
   int8_t tempr;
   double angle;
   filter_t rpmFilter;//转速滤波器
@@ -117,18 +117,19 @@ typedef struct{
   #define MOTOR_ONLINE_WARMUP_MS 800U // 电机重新上电后的保护判定预热时间
 
   // 全自动模式（RunningTask=6）预设发射参数（4发）
-  #define DART_AUTO_YAW_0   -72000
-  #define DART_AUTO_V1_0    7500
+  #define DART_AUTO_YAW_0   -68000
+  #define DART_AUTO_V1_0    7400
   #define DART_AUTO_V2_0    4450
-  #define DART_AUTO_YAW_1   -70100
-  #define DART_AUTO_V1_1    7200
+  #define DART_AUTO_YAW_1   -67000
+  #define DART_AUTO_V1_1    6900
   #define DART_AUTO_V2_1    4450
-  #define DART_AUTO_YAW_2   -68000
+  #define DART_AUTO_YAW_2   -67000
   #define DART_AUTO_V1_2    7050
   #define DART_AUTO_V2_2    4450
-  #define DART_AUTO_YAW_3   -68000
-  #define DART_AUTO_V1_3    7050
+  #define DART_AUTO_YAW_3   -67000
+  #define DART_AUTO_V1_3    6950
   #define DART_AUTO_V2_3    4450
+  #define DART_DIEDSPACE_TIME 1000U // 死区，防止发射端短时间连按导致的错误触发
 
   // 半自动模式（RunningTask=7）第一发预设参数
   #define DART_SEMI_FIRST_YAW   -68000
@@ -136,7 +137,7 @@ typedef struct{
   #define DART_SEMI_FIRST_V2    4450
 
   // 比赛模式选择：0=关闭（默认手动CDC控制），6=全自动，7=半自动
-  #define DART_COMPETITION_MODE 6
+  #define DART_COMPETITION_MODE 6   //0 && 6 都已实现，7赖于裁判系统客户端本身没有传数据包，只有0x1FF的飞镖操作系统命令，暂时无法测试  
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -153,7 +154,9 @@ void MotorSetOutput(Motor *motor, enum MotorMode mode, double value);//设置输
 void MotorRunToAngleBlocking(Motor *motor, double angle, double speed);//以指定角度运行电机
 void MotorRunSpeedTime(Motor *motor, double speed, uint32_t time);//以指定速度运行指定时间
 void MotorRunSpeedTimeBlocking(Motor *motor, double speed, uint32_t time);//以指定速度运行指定时间(阻塞)
-void MotorRunToSetTemp(Motor *motor, double targetTemp, double warmSpeed, double holdSpeed);//摩擦轮预热控温
+
+//void MotorRunToSetTemp(Motor *motor, double targetTemp, double warmSpeed, double holdSpeed);//摩擦轮预热控温，但在飞镖系统内目前几乎无用
+
 void CAN_SendMessage(uint8_t *data, uint32_t StdId);//发送CAN消息
 void TransferToMotorSend(Motor *motor);//根据电机的StdId来决定发送到哪个MotorSend结构体中
 void CanSendMotor(MotorSend *motorsend);//发送对应的MotorSend结构体
@@ -331,6 +334,7 @@ int main(void)
     //HAL_Delay(1);
     //HAL_GPIO_TogglePin(LED_R_GPIO_Port, LED_R_Pin);
     //HAL_Delay(10);
+    //以上也是测试代码
     
     /* USER CODE END WHILE */
 
@@ -715,6 +719,8 @@ void MotorRunSpeedTimeBlocking(Motor *motor, double speed, uint32_t time){
 
 //摩擦轮预热控温：以 warmSpeed 升温至 targetTemp，之后用 holdSpeed 维持
 //当 RunningTask 不再是 5 时退出并停止摩擦轮，允许发射任务接管
+/*
+其实没什么用的温度控制，因为飞镖发射精度和这个没关系
 void MotorRunToSetTemp(Motor *motor, double targetTemp, double warmSpeed, double holdSpeed){
   // 先以 warmSpeed 快速升温
   MotorSetOutput(motor, speedMode, warmSpeed);
@@ -742,7 +748,7 @@ void MotorRunToSetTemp(Motor *motor, double targetTemp, double warmSpeed, double
 exit:
   MotorSetOutput(motor, speedMode, 0);
   return;
-};
+};*/
 
 
 
@@ -1559,9 +1565,12 @@ void StartTask2(void const * argument)
       RunningTask=0;
     }
     if(RunningTask==5){
+      
+      //由于控温任务确认无效，这个逻辑保留，其实是不想删了
       // 摩擦轮预热控温：同时控制所有4个摩擦轮
       // 以平均温度判断：低于目标升温，高于目标暂停
       // 退出后不清空 RunningTask，让主循环处理新设的任务值
+  /*
       double targetTemp = 50;
       double warmSpeed = 1000;
       double holdSpeed = 600;
@@ -1603,8 +1612,10 @@ void StartTask2(void const * argument)
       MotorSetOutput(&fric2, speedMode, 0);
       MotorSetOutput(&fric3, speedMode, 0);
       MotorSetOutput(&fric4, speedMode, 0);
+      */
     }
     if(RunningTask==6){
+      //比赛采用的是这版逻辑，实现裁判端控制系统发射任务
       // 全自动模式：按一次Y发两发，再按一次Y再发两发
       // 第1次Y：发射第1、2发
       uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
@@ -1638,6 +1649,16 @@ void StartTask2(void const * argument)
       MotorRunToStall(&lift,-6000);//换弹位置
       // 第2次Y：发射第3、4发
       last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
+
+      // 死区检测：确保距离上次发射命令至少经过 DART_DIEDSPACE_TIME，防止连按误触发
+      {
+        uint32_t now = HAL_GetTick();
+        uint32_t elapsed = now - last_launch_time;
+        if(elapsed < DART_DIEDSPACE_TIME){
+          osDelay(DART_DIEDSPACE_TIME - elapsed);
+        }
+      }
+      
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
         if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
@@ -1664,42 +1685,44 @@ void StartTask2(void const * argument)
       MotorSetOutput(&fric3, speedMode, 0);
       MotorSetOutput(&fric4, speedMode, 0);
       MotorRunSpeedTimeBlocking(&lift,-30000,3000);
-      MotorRunToStall(&lift,6000);//回到原来位置
+      MotorRunToStall(&lift,6000);
+      MotorRunToStall(&load,-3000);//回到原来位置
       RunningTask=0;
     }
     if(RunningTask==7){
+      // 想象中更完美一些的发射控制程序，实际不可操作，已废弃 
       // 半自动模式：第1发使用预设参数，后续等待裁判系统0x0301数据
       // 等待操作手按Y键（latest_launch_cmd_time变化）后发射第1发
-      uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
-      while(1){
-        (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
-        osDelay(10);
-      }
-      // 第1发：使用半自动预设参数
-      DartFireSingle(DART_SEMI_FIRST_YAW, DART_SEMI_FIRST_V1, DART_SEMI_FIRST_V2);
-      // 第2~4发：等待裁判系统通过0x0301下发参数，每收到一发立即打出
-      for(int shot = 1; shot < 4; ){
-        referee_dart_param_item_t param;
-        int ret = Referee_GetDartParam(&g_referee, &param);
-        if(ret == 0){
-          // 收到有效参数，更新dartParam_array并发射
-          uint8_t id = param.dart_id;
-          if(id > 3) id = 0; // 防越界
-          dartParam_array[id].yaw     = param.yaw;
-          dartParam_array[id].v1Speed = param.v1Speed;
-          dartParam_array[id].v2Speed = param.v2Speed;
-          DartFireSingle(dartParam_array[id].yaw,
-                         dartParam_array[id].v1Speed,
-                         dartParam_array[id].v2Speed);
-          shot++;
-        }
-        // 检查是否中途被切走
-        if(RunningTask != 7) goto exit_task7;
-        osDelay(5);
-      }
-      exit_task7:
-      RunningTask=0;
+      // uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
+      // while(1){
+      //   (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
+      //   if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
+      //   osDelay(10);
+      // }
+      // // 第1发：使用半自动预设参数
+      // DartFireSingle(DART_SEMI_FIRST_YAW, DART_SEMI_FIRST_V1, DART_SEMI_FIRST_V2);
+      // // 第2~4发：等待裁判系统通过0x0301下发参数，每收到一发立即打出
+      // for(int shot = 1; shot < 4; ){
+      //   referee_dart_param_item_t param;
+      //   int ret = Referee_GetDartParam(&g_referee, &param);
+      //   if(ret == 0){
+      //     // 收到有效参数，更新dartParam_array并发射
+      //     uint8_t id = param.dart_id;
+      //     if(id > 3) id = 0; // 防越界
+      //     dartParam_array[id].yaw     = param.yaw;
+      //     dartParam_array[id].v1Speed = param.v1Speed;
+      //     dartParam_array[id].v2Speed = param.v2Speed;
+      //     DartFireSingle(dartParam_array[id].yaw,
+      //                    dartParam_array[id].v1Speed,
+      //                    dartParam_array[id].v2Speed);
+      //     shot++;
+      //   }
+      //   // 检查是否中途被切走
+      //   if(RunningTask != 7) goto exit_task7;
+      //   osDelay(5);
+      // }
+      // exit_task7:
+      // RunningTask=0;
     }
     //alarm_level = 2; // 测试报警
     osDelay(1);
