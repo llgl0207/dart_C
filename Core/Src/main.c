@@ -117,16 +117,16 @@ typedef struct{
   #define MOTOR_ONLINE_WARMUP_MS 800U // 电机重新上电后的保护判定预热时间
 
   // 全自动模式（RunningTask=6）预设发射参数（4发）
-  #define DART_AUTO_YAW_0   -68000//原数据-69000
-  #define DART_AUTO_V1_0    7300//原数据是7400
+  #define DART_AUTO_YAW_0   -67500//参照第一场已改数据
+  #define DART_AUTO_V1_0    7400
   #define DART_AUTO_V2_0    4450
-  #define DART_AUTO_YAW_1   -67000//原数据-68000
-  #define DART_AUTO_V1_1    6900
+  #define DART_AUTO_YAW_1   -66500//原数据-68000//67000第二版
+  #define DART_AUTO_V1_1    7000//原6900
   #define DART_AUTO_V2_1    4450
-  #define DART_AUTO_YAW_2   -67000//原数据-68000
-  #define DART_AUTO_V1_2    7050
+  #define DART_AUTO_YAW_2   -64500//原数据-68000//66000第二版
+  #define DART_AUTO_V1_2    6950
   #define DART_AUTO_V2_2    4450
-  #define DART_AUTO_YAW_3   -66000//往下调2000，目的是用来检测是否调过，原数据为-68000
+  #define DART_AUTO_YAW_3   -64000//往下调2000，目的是用来检测是否调过，原数据为-68000//66000第二版
   #define DART_AUTO_V1_3    6950
   #define DART_AUTO_V2_3    4450
   #define DART_DIEDSPACE_TIME 1000U // 死区，防止发射端短时间连按导致的错误触发
