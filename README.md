@@ -164,23 +164,27 @@ SOF(0xA5) + DataLength(2B) + Seq(1B) + CRC8(1B) + CmdID(2B) + Payload + CRC16(2B
 | **6** | **全自动** | 使用宏预设参数连发 4 发, 需裁判系统开门信号 |
 | **7** | **半自动** | 第 1 发宏预设, 后续等待裁判系统 0x0301 参数 |
 
+### 手动模式（RunningTask = 1，2，3，4）
+
+这个模式下，上位机通过 CDC 发送指令，记得打开文件夹中的EN.py文件，用于发送指令。
+
 ### 全自动模式 (RunningTask = 6)
 
 使用 `main.c` 顶部的宏定义预设参数：
 
 ```c
-#define DART_AUTO_YAW_0   245000   // 第1发云台角度
+#define DART_AUTO_YAW_0   245000   // 第1发云台角度，此处已经按照上位机面板修正过yaw轴数据，可直接使用
 #define DART_AUTO_V1_0    4000     // 第1发摩擦轮1/3转速
 #define DART_AUTO_V2_0    4000     // 第1发摩擦轮2/4转速
 // ... YAW/V1/V2_1, _2, _3 同理
 ```
 
 流程：
-1. 等待裁判系统开门 (`dart_launch_opening_status == 0`)
-2. 按预设参数顺序发射 4 发
+1. 等待接收裁判系统端的选手最后一次更改的时间戳来确定发射（`g_dart_cmd_cache.latest_launch_cmd_time`）  具体对应到云台手上面就是，开闸（Y），确定发射（L），
+2. 按预设参数顺序发射 2 发，每次按"l"键确认发射,一共发射 4 发，发射完后取消发射任务，进入空闲状态；
 3. 发射完毕后 `RunningTask = 0`
 
-### 半自动模式 (RunningTask = 7)
+### 半自动模式 (RunningTask = 7)//////////此个任务未完成，已废弃
 
 ```c
 #define DART_SEMI_FIRST_YAW   245000
