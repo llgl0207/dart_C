@@ -118,10 +118,10 @@ typedef struct{
 
   // 全自动模式（RunningTask=6）预设发射参数（4发）
   #define DART_AUTO_YAW_0   -67500//参照第一场已改数据
-  #define DART_AUTO_V1_0    7400
+  #define DART_AUTO_V1_0    7200
   #define DART_AUTO_V2_0    4450
   #define DART_AUTO_YAW_1   -66500//原数据-68000//67000第二版
-  #define DART_AUTO_V1_1    7000//原6900
+  #define DART_AUTO_V1_1    6800//原6900
   #define DART_AUTO_V2_1    4450
   #define DART_AUTO_YAW_2   -64500//原数据-68000//66000第二版
   #define DART_AUTO_V1_2    6950
@@ -1621,7 +1621,7 @@ void StartTask2(void const * argument)
       uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time && g_dart_cmd_cache.dart_launch_opening_status != 0) break;
         osDelay(10);
       }
       // 第1发
@@ -1661,7 +1661,7 @@ void StartTask2(void const * argument)
       
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time) break;
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time && g_dart_cmd_cache.dart_launch_opening_status != 0) break;
         osDelay(10);
       }
       // 第3发
@@ -1686,7 +1686,8 @@ void StartTask2(void const * argument)
       MotorSetOutput(&fric4, speedMode, 0);
       MotorRunSpeedTimeBlocking(&lift,-30000,3000);
       MotorRunToStall(&lift,6000);
-      MotorRunToStall(&load,-3000);//回到原来位置
+      MotorRunToStall(&load,-3000);
+      MotorRunToStall(&lift,-6000);//回到原来位置
       RunningTask=0;
     }
     if(RunningTask==7){
