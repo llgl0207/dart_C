@@ -1621,7 +1621,7 @@ void StartTask2(void const * argument)
       uint16_t last_launch_time = g_dart_cmd_cache.latest_launch_cmd_time;
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time && g_dart_cmd_cache.dart_launch_opening_status != 0) break;
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time && g_dart_cmd_cache.dart_launch_opening_status == 0) break;
         osDelay(10);
       }
       // 第1发
@@ -1661,7 +1661,7 @@ void StartTask2(void const * argument)
       
       while(1){
         (void)Referee_GetDartClientCmd(&g_referee, &g_dart_cmd_cache);
-        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time && g_dart_cmd_cache.dart_launch_opening_status != 0) break;
+        if(g_dart_cmd_cache.latest_launch_cmd_time != last_launch_time && g_dart_cmd_cache.dart_launch_opening_status == 0) break;
         osDelay(10);
       }
       // 第3发
